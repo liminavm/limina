@@ -1498,6 +1498,16 @@ drops, when an open fails, and on the VMM's exit (`Vmm::stop` runs an exit obser
 A worker that crashes or is killed still leaves its file. Do not sweep by the embedded pid — pids
 are recycled; a safe sweep needs proof the owner is gone (a lock the worker holds, say).
 
+### vmnet interfaces leak until the host refuses new ones
+Measured 2026-10-22: the host carried ~250 `vmenet` interfaces, all down, and every new
+`vmnet_start_interface` failed with `VMNET_FAILURE` (1001) while InternetSharing logged
+`mis_network_add_interface failed`. Seven vmnet tests failed in the suite; the netd fallback kept
+working. `sudo killall InternetSharing` (SIP refuses a `launchctl kickstart`) cleared them all. The
+suspect is the teardown path: `Vmnet`'s `Drop` (libkrun `devices/src/virtio/net/vmnet.rs`) stops the
+interface, but a worker that exits through SYSTEM_OFF or is killed never runs it. Owed: count
+`vmenet` interfaces around a clean poweroff, a SIGKILL and a crash to find which exits leak, then
+stop the interface on every exit path the worker controls and find out what reclaims the rest.
+
 ### An idle guest reads virtio-net `InterruptStatus` about 2,400 times a second
 Measured 2026-08-27 on a stock F44 guest at a settled idle desktop with `--net`: 72,374 MMIO reads of
 `0xa01f060` in 30 s — offset `0x060` (`InterruptStatus`) on `a01f000.virtio_mmio` → `virtio_net`.
