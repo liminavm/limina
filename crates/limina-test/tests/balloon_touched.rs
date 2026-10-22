@@ -7,7 +7,7 @@
 //! whole block, and a stock 4 KiB guest's balloon takes single pages. The guest's free lists
 //! hold a large free region as long runs, though, and the balloon takes its pages from them, so
 //! blocks complete: measured 2026-10-22, 2004 of 2048 MiB came back on 2 MiB blocks and 2049 MiB
-//! on anonymous RAM. Run it both ways with `LIMINA_GUEST_RAM=objects|anon`.
+//! on anonymous RAM. `LIMINA_GUEST_RAM=anon` runs it on anonymous RAM.
 
 use std::time::{Duration, Instant};
 

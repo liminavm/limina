@@ -2371,9 +2371,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push("--balloon-free-page-reporting".into());
     }
 
-    // Guest RAM from owned memory blocks (docs/design/guest-ram-objects.md), opt-in with
-    // LIMINA_GUEST_RAM=objects until the suite is green on it.
-    if std::env::var("LIMINA_GUEST_RAM").as_deref() == Ok("objects") {
+    // Guest RAM from owned memory blocks (docs/design/guest-ram-objects.md), which bill a page
+    // the worker and the guest both touch once. LIMINA_GUEST_RAM=anon keeps the anonymous
+    // mapping, which bills it twice and releases through MADV_FREE_REUSABLE.
+    if std::env::var("LIMINA_GUEST_RAM").as_deref() != Ok("anon") {
         let min = mem_range.map(|(min, _)| min as u64);
         let spans = balloon_policy::guest_ram_blocks(cli.reclaim, min)
             .iter()
