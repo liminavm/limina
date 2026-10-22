@@ -79,8 +79,10 @@ enum {
 } test = TIME_ELAPSED;
 
 GLuint prog;
-/* limina spike: TQH_NOQ=1 runs the same timing loop with no query at all. */
+/* limina spike: TQH_NOQ=1 runs the same timing loop with no query at all; TQH_MAX_ITERS=<n>
+ * stops the doubling at n, so a run can check that GL still renders after a hang. */
 static bool noq;
+static int max_iters;
 GLint iters_loc;
 
 static float
@@ -195,6 +197,8 @@ retry:
 	for (iters = 1; ; iters *= 2) {
 		if (draw(q, iters) > 0.1)
 			break;
+		if (max_iters && iters >= max_iters)
+			break;
 		if (iters * 2 <= iters) {
 			printf("Couldn't find appropriate number of iterations\n");
 			piglit_report_result(PIGLIT_FAIL);
@@ -226,7 +230,7 @@ retry:
 	 * We wouldn't have that problem if we could rely on the GPU
 	 * time elapsed query, but that's the thing we're testing.
 	 */
-	if (cpu_time_mean < 0.05)
+	if (cpu_time_mean < 0.05 && !max_iters)
 		goto retry;
 
 	/* Calculate stddevs. */
@@ -298,6 +302,7 @@ piglit_init(int argc, char **argv)
 {
 	piglit_require_gl_version(20);
 	noq = getenv("TQH_NOQ") != NULL;
+	max_iters = getenv("TQH_MAX_ITERS") ? atoi(getenv("TQH_MAX_ITERS")) : 0;
 	setvbuf(stderr, NULL, _IONBF, 0);
 
 	piglit_require_extension("GL_EXT_timer_query");

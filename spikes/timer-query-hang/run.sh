@@ -4,7 +4,10 @@
 # swaps in the instrumented time-elapsed.c next to this script, rebuilds that one binary, and runs it
 # once on gbm: `q` with its GL_TIME_ELAPSED queries, `noq` with every query removed (TQH_NOQ=1) and the
 # same glFinish-timed doubling loop. Each draw prints `[TQH] iters=N cpu=S s` on stderr.
-# Writes <out-prefix>.test.txt (the test's output), <out-prefix>.worker.log, <out-prefix>.gpurestart.txt.
+# Then runs it again capped at 64 iterations (TQH_MAX_ITERS) to see whether GL still renders: its
+# last line is piglit's verdict on the rendered colour.
+# Writes <out-prefix>.test.txt (the test's output), <out-prefix>.after.txt (the capped rerun),
+# <out-prefix>.worker.log, <out-prefix>.gpurestart.txt and <out-prefix>.png (the window).
 # A GPU hang is host-wide: run it only on a host with no other VM.
 set -u
 DISK=${1:?disk}; ARM=${2:?q|noq}; OUT=${3:?out prefix}
@@ -15,7 +18,7 @@ LOG=/tmp/limina-worker-$(basename "${DISK%.raw}").log
 SSH=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=error)
 rm -f "$LOG"
 start=$(date '+%Y-%m-%d %H:%M:%S')
-LIMINA_DISK=$DISK LIMINA_CPUS=4 LIMINA_RAM_MIB=8192 \
+LIMINA_DISK=$DISK LIMINA_CPUS=4 LIMINA_RAM_MIB=8192 LIMINA_WINDOW_CAPTURE="$OUT.png" \
   RUST_LOG=warn,limina=info,krun::vmm=info,krun_devices=info \
   spikes/venus-draw-probe/boot-enhanced-efi-kk.sh > "$OUT.boot.out" 2>&1 &
 boot=$!
@@ -29,6 +32,10 @@ gtimeout --kill-after=10 300 ssh -p "$port" "${SSH[@]}" claude@127.0.0.1 \
   "cd ~/piglit && $env PIGLIT_PLATFORM=gbm timeout -k 5 240 bin/ext_timer_query-time-elapsed -auto -fbo 2>&1; echo rc=\$?" \
   > "$OUT.test.txt"
 echo "test done: $(tail -1 "$OUT.test.txt")"
+gtimeout --kill-after=10 120 ssh -p "$port" "${SSH[@]}" claude@127.0.0.1 \
+  "cd ~/piglit && TQH_NOQ=1 TQH_MAX_ITERS=64 PIGLIT_PLATFORM=gbm timeout -k 5 90 bin/ext_timer_query-time-elapsed -auto -fbo 2>&1 | grep -v TQH; echo rc=\$?" \
+  > "$OUT.after.txt"
+echo "after: $(tr '\n' ' ' < "$OUT.after.txt")"
 cp "$LOG" "$OUT.worker.log"
 log show --start "$start" --predicate 'eventMessage CONTAINS "GPURestart" OR eventMessage CONTAINS "Deny submissions"' \
   > "$OUT.gpurestart.txt" 2>&1

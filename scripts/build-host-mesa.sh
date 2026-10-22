@@ -26,6 +26,11 @@
 #                         (see docs/drivers/kosmickrisp.rst -- do NOT ship a bundle from it)
 #   NDEBUG=true|false     override the assert decision on its own
 #   JOBS=N                ninja parallelism (default: ninja's own)
+#   HOST_MESA_SUFFIX=x    build into build-kk-x, build-zink-kk-x and zink-kk-x-prefix instead of the
+#                         shared dirs, so a feature tree can be built and booted beside the real one:
+#                         build the worker with MESA_PREFIX=<zink-kk-x-prefix> (it links libEGL by
+#                         path) and boot with that and LIMINA_KK_ICD=<build-kk-x ICD>. The checks at
+#                         the end still read the shared dirs
 #   MESA_CS_SIZE=80g      max size of a freshly created sparse image (sparse: grows on demand)
 #   LIBCLC_PC_DIR=<dir>   use this libclc instead of the manifest-pinned one (must still have
 #                         the 22.x shape: a .pc whose libexecdir holds spirv*-mesa3d-.spv)
@@ -45,6 +50,11 @@ IMAGE="$ROOT/third_party/mesa-cs.sparseimage"
 # and worktree links the same prefix. meson will not re-point a build dir at another source tree,
 # so switching trees means removing $MOUNT/build-kk and $MOUNT/build-zink-kk first.
 SRC="$(pin_tree kosmickrisp)"
+SFX="${HOST_MESA_SUFFIX:+-$HOST_MESA_SUFFIX}"
+KK_BUILD="$MOUNT/build-kk$SFX"
+ZINK_BUILD="$MOUNT/build-zink-kk$SFX"
+ZINK_PREFIX="$MOUNT/zink-kk$SFX-prefix"
+[ -z "$SFX" ] && ZINK_PREFIX="$MOUNT/zink-kk-prefix"
 
 WHAT="${1:-both}"
 case "$WHAT" in kk|zink|both) ;; *) echo "usage: $0 [kk|zink|both]" >&2; exit 1 ;; esac
@@ -239,19 +249,19 @@ COMMON=(
 )
 
 if [ "$WHAT" = "kk" ] || [ "$WHAT" = "both" ]; then
-  echo "==> KosmicKrisp: $MOUNT/build-kk (buildtype=$BUILDTYPE b_ndebug=$NDEBUG)"
-  setup_build "$MOUNT/build-kk" "${COMMON[@]}" -Dgallium-drivers= -Dopengl=false
-  ninja -C "$MOUNT/build-kk" ${NINJA_JOBS[@]+"${NINJA_JOBS[@]}"}
+  echo "==> KosmicKrisp: $KK_BUILD (buildtype=$BUILDTYPE b_ndebug=$NDEBUG)"
+  setup_build "$KK_BUILD" "${COMMON[@]}" -Dgallium-drivers= -Dopengl=false
+  ninja -C "$KK_BUILD" ${NINJA_JOBS[@]+"${NINJA_JOBS[@]}"}
 fi
 
 if [ "$WHAT" = "zink" ] || [ "$WHAT" = "both" ]; then
-  echo "==> zink-on-KK: $MOUNT/build-zink-kk -> $MOUNT/zink-kk-prefix (buildtype=$BUILDTYPE b_ndebug=$NDEBUG)"
+  echo "==> zink-on-KK: $ZINK_BUILD -> $ZINK_PREFIX (buildtype=$BUILDTYPE b_ndebug=$NDEBUG)"
   # The GL superset of the same tree: zink (GL->Vulkan) over KK, with a headless surfaceless
   # EGL. `macos` is a valid windowing platform but NOT a valid egl-native-platform, so the
   # default would pick an undefined _EGL_PLATFORM_MACOS and fail to compile -- pin it to
   # surfaceless, which is exactly what vrend wants anyway. zink's darwin path needs the
   # MoltenVK headers to COMPILE; at runtime it talks to whatever ICD VK_DRIVER_FILES names.
-  setup_build "$MOUNT/build-zink-kk" "${COMMON[@]}" \
+  setup_build "$ZINK_BUILD" "${COMMON[@]}" \
       -Dgallium-drivers=zink \
       -Dopengl=true \
       -Dgles2=enabled \
@@ -261,9 +271,9 @@ if [ "$WHAT" = "zink" ] || [ "$WHAT" = "both" ]; then
       -Dglvnd=disabled \
       -Dshared-llvm=enabled \
       -Dmoltenvk-dir="$(brew --prefix molten-vk)" \
-      --prefix "$MOUNT/zink-kk-prefix"
-  ninja -C "$MOUNT/build-zink-kk" ${NINJA_JOBS[@]+"${NINJA_JOBS[@]}"}
-  meson install -C "$MOUNT/build-zink-kk"
+      --prefix "$ZINK_PREFIX"
+  ninja -C "$ZINK_BUILD" ${NINJA_JOBS[@]+"${NINJA_JOBS[@]}"}
+  meson install -C "$ZINK_BUILD"
 fi
 
 # ---- verify what the consumers actually open --------------------------------------------------
