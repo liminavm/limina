@@ -513,8 +513,9 @@ fn gpu_device(display: &DisplaySpec, disks: &[DiskSpec]) -> GpuDevice {
     // GPU watchdog, and every such stop restarts the host's GPU for every application on it.
     // KosmicKrisp survives the hang and zink counts it against the guest context that caused it
     // (spikes/timer-query-hang): a context may cause two, after which it is reset and vrend
-    // refuses it; once the VM has caused four, any further hang resets its context at once. Set
-    // ZINK_HANG_LIMIT / ZINK_HANG_BUDGET yourself to change that.
+    // refuses it; once the VM has caused four, any further hang resets its context at once, until
+    // an hour passes with no hang (zink's ZINK_HANG_FORGIVE_S default) and the count starts over.
+    // Set ZINK_HANG_LIMIT / ZINK_HANG_BUDGET / ZINK_HANG_FORGIVE_S yourself to change that.
     for (var, value) in [("ZINK_HANG_LIMIT", "2"), ("ZINK_HANG_BUDGET", "4")] {
         if std::env::var_os(var).is_none() {
             // SAFETY: as for VREND_MAX_SAMPLES above -- before any renderer thread exists, and

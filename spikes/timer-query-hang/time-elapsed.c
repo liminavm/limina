@@ -80,7 +80,8 @@ enum {
 
 GLuint prog;
 /* limina spike: TQH_NOQ=1 runs the same timing loop with no query at all; TQH_MAX_ITERS=<n>
- * stops the doubling at n, so a run can check that GL still renders after a hang. */
+ * stops the doubling at n and leaves the verdict to the probe of the rendered colour, so a run can
+ * check that GL still renders after a hang. */
 static bool noq;
 static int max_iters;
 GLint iters_loc;
@@ -270,7 +271,7 @@ retry:
 	 * now and just check that the sampled delta isn't too small
 	 * to care about.
 	 */
-	if (t > t_cutoff && fabs(delta_mean) > .05 * cpu_time_mean) {
+	if (!max_iters && t > t_cutoff && fabs(delta_mean) > .05 * cpu_time_mean) {
 		fprintf(stderr, "GPU time didn't match CPU time\n");
 		printf("Estimated CPU overhead: %f\n", cpu_overhead);
 		printf("Difference: %f secs (+/- %f secs)\n",

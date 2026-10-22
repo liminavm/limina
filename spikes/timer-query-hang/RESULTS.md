@@ -14,7 +14,8 @@ stopped:
   (`vkGetCommandPoolHangCountLIMINA`).
 - zink reads those counts per context and resets a context that has caused `ZINK_HANG_LIMIT` hangs,
   or any context that hangs once the VM has caused more than `ZINK_HANG_BUDGET`. The limina worker
-  defaults these to 2 and 4.
+  defaults these to 2 and 4. An hour without a hang (`ZINK_HANG_FORGIVE_S`) empties the budget,
+  so a VM that runs for days is not held to one bad afternoon.
 - vrend creates its contexts with `LOSE_CONTEXT_ON_RESET`, reads the reset status after every batch
   and refuses a reset context from then on (`refused: vrend ctx N: the host reset this context for
   hanging the GPU`).
@@ -31,13 +32,14 @@ Measured 2026-10-22 on the M1 Max dev Mac, macOS 27.0. Stock F44 guest
 ## The guest test, end to end
 
 `run.sh <clone> noq <out>` runs the test with every query removed, then a capped rerun
-(`TQH_MAX_ITERS=64`) as the check that GL still renders afterwards:
+(`TQH_MAX_ITERS=64`) whose verdict is piglit's probe of the rendered colour, as the check that GL
+still renders afterwards:
 
 | stack | GPU restarts | the VM afterwards | capped rerun |
 |---|---|---|---|
 | `limina-kk` (before) | 1, then the device is lost | every GL context fails; a 19.9 s control-queue stall; the worker dies on signal 11 ~30 s later | — |
 | KK recovery only | 12 | desktop renders; clean poweroff | pass |
-| KK recovery + zink attribution + vrend refusal, limit 2 | 4 | desktop renders; clean poweroff | pass |
+| KK recovery + zink attribution + vrend refusal, limit 2 | 4–5 over three runs | desktop renders; clean poweroff | pass |
 
 With the full fix, the offending context was reset on its second hang and vrend refused every later
 submit from it. Two more hangs still landed: work the context had already queued before the reset.

@@ -1,17 +1,18 @@
 --- /Users/kov/Projects/piglit/tests/spec/ext_timer_query/time-elapsed.c	2026-10-21 11:09:23
-+++ time-elapsed.c	2026-10-22 12:49:15
-@@ -79,6 +79,10 @@
++++ time-elapsed.c
+@@ -79,6 +79,11 @@
  } test = TIME_ELAPSED;
  
  GLuint prog;
 +/* limina spike: TQH_NOQ=1 runs the same timing loop with no query at all; TQH_MAX_ITERS=<n>
-+ * stops the doubling at n, so a run can check that GL still renders after a hang. */
++ * stops the doubling at n and leaves the verdict to the probe of the rendered colour, so a run can
++ * check that GL still renders after a hang. */
 +static bool noq;
 +static int max_iters;
  GLint iters_loc;
  
  static float
-@@ -91,13 +95,15 @@
+@@ -91,13 +96,15 @@
  
  	start_time = piglit_time_get_nano();
  
@@ -29,7 +30,7 @@
  		glQueryCounter(q[1], GL_TIMESTAMP);
  	} else {
  		glEndQuery(GL_TIME_ELAPSED);
-@@ -109,6 +115,8 @@
+@@ -109,6 +116,8 @@
  	glFinish();
  
  	end_time = piglit_time_get_nano();
@@ -38,7 +39,7 @@
  
  	return (end_time - start_time)/ 1000.0 / 1000.0 / 1000.0;
  }
-@@ -118,6 +126,9 @@
+@@ -118,6 +127,9 @@
  {
  	GLint64EXT elapsed;
  
@@ -48,7 +49,7 @@
  	if (test == TIMESTAMP) {
  		GLint64 start, end;
  		glGetQueryObjecti64vEXT(q[0], GL_QUERY_RESULT, &start);
-@@ -186,6 +197,8 @@
+@@ -186,6 +198,8 @@
  	for (iters = 1; ; iters *= 2) {
  		if (draw(q, iters) > 0.1)
  			break;
@@ -57,7 +58,7 @@
  		if (iters * 2 <= iters) {
  			printf("Couldn't find appropriate number of iterations\n");
  			piglit_report_result(PIGLIT_FAIL);
-@@ -217,7 +230,7 @@
+@@ -217,7 +231,7 @@
  	 * We wouldn't have that problem if we could rely on the GPU
  	 * time elapsed query, but that's the thing we're testing.
  	 */
@@ -66,7 +67,16 @@
  		goto retry;
  
  	/* Calculate stddevs. */
-@@ -288,6 +301,9 @@
+@@ -257,7 +271,7 @@
+ 	 * now and just check that the sampled delta isn't too small
+ 	 * to care about.
+ 	 */
+-	if (t > t_cutoff && fabs(delta_mean) > .05 * cpu_time_mean) {
++	if (!max_iters && t > t_cutoff && fabs(delta_mean) > .05 * cpu_time_mean) {
+ 		fprintf(stderr, "GPU time didn't match CPU time\n");
+ 		printf("Estimated CPU overhead: %f\n", cpu_overhead);
+ 		printf("Difference: %f secs (+/- %f secs)\n",
+@@ -288,6 +302,9 @@
  piglit_init(int argc, char **argv)
  {
  	piglit_require_gl_version(20);
