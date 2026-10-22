@@ -71,6 +71,10 @@ fn a_stock_guest_plugs_and_unplugs_virtio_mem() {
         REGION_MIB,
         "the worker has no virtio-mem device"
     );
+    assert_eq!(
+        stats.mem_bound, 1,
+        "the guest's driver did not bind the device"
+    );
     let probe = guest
         .ssh_exec(
             "lsmod | grep -w virtio_mem; sudo dmesg | grep -i virtio_mem; \

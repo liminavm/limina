@@ -1963,6 +1963,8 @@ pub struct BalloonStats {
     pub mem_region: u64,
     pub mem_requested: u64,
     pub mem_plugged: u64,
+    /// 1 once the guest's virtio-mem driver has activated the device.
+    pub mem_bound: u64,
 }
 
 /// How the supervisor (and thus the VM) ended.
@@ -2565,6 +2567,7 @@ impl Guest {
                 "mem_region" => stats.mem_region = v,
                 "mem_requested" => stats.mem_requested = v,
                 "mem_plugged" => stats.mem_plugged = v,
+                "mem_bound" => stats.mem_bound = v,
                 _ => {}
             }
         }

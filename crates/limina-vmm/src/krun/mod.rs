@@ -1259,7 +1259,8 @@ fn install_resize_listener(
 /// - `stats`          → reply `target=<bytes> actual=<bytes> reclaimed=<bytes>` (the last commanded
 ///   target, the guest's self-reported balloon size, and total reclaimed) on the same connection.
 /// - `mem <bytes>`    → ask the guest to plug that much of the virtio-mem region, when there is one;
-///   `stats` then also reports `mem_region`, `mem_requested` and `mem_plugged`.
+///   `stats` then also reports `mem_region`, `mem_requested`, `mem_plugged` and `mem_bound` (1
+///   once the guest's driver has activated the device).
 ///
 /// Runs on a detached thread for the VMM's lifetime; the supervisor policy and the test harness
 /// connect to it. Mirrors [`install_resize_listener`].
@@ -1417,8 +1418,8 @@ fn serve_balloon_conn(
                 let mem_stats = mem.as_ref().map_or(String::new(), |mem| {
                     let s = mem.stats();
                     format!(
-                        " mem_region={} mem_requested={} mem_plugged={}",
-                        s.region_size, s.requested_size, s.plugged_size
+                        " mem_region={} mem_requested={} mem_plugged={} mem_bound={}",
+                        s.region_size, s.requested_size, s.plugged_size, s.bound as u8
                     )
                 });
                 if let Err(e) = writeln!(
