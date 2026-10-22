@@ -112,6 +112,28 @@ QEMU's works only on Linux hosts.
   (`min..max`) becomes virtio-mem where the guest drives the device. A guest without `virtio_mem`
   keeps the balloon over the whole range, as today.
 
+### 3.1 Which layout a boot takes
+
+`crates/limina/src/elastic_mem.rs` picks one of three layouts per worker spawn:
+
+- **Whole.** All of `max` is RAM and the balloon covers `min..max`. Flat CLI runs (no `state.toml`)
+  always boot this way, as does any VM whose range is under one 128 MiB memory block.
+- **Probe.** As Whole, plus a dormant 128 MiB virtio-mem region the guest is never asked to plug.
+  A managed VM boots this way until its guest binds the device; the supervisor then writes
+  `virtio_mem = true` to `state.toml`. The dormant device still blocks hibernation.
+- **Split.** RAM is `max` minus the region, where the region is `max − min` rounded down to whole
+  memory blocks; the worker asks the guest to plug all of it from boot
+  (`--virtio-mem-requested-mib`). The policy keeps its decisions and sends them as plug sizes:
+  reclaim `r` becomes `mem (region − r)`, rounded up to the 2 MiB device block. It holds until the
+  boot-time plug lands (or 120 s pass) and never scrubs. A Split boot runs on `min` until
+  `virtio_mem` loads, and for the whole session if it never does; a boot that runs 300 s without
+  binding clears the flag, so the next one probes again.
+
+A resume takes the layout recorded in its `[suspended]` record, whatever has been learned since.
+A reboot relaunch inside one session takes what has been learned, so it may split where the first
+boot probed. `LIMINA_VIRTIO_MEM=<MiB>` is a test lever, not a mode: a fixed region beside Whole RAM,
+plugged only through the control socket's `mem` command.
+
 Free page reporting is off for every guest (`crates/limina/src/main.rs:357-362`, the stock
 suspend-to-idle crash; the upstream fix 0b45f6927a14 is in v7.2-rc6, Fedora 44 runs 6.19). Where it
 is on, its reports are naturally aligned 2 MiB blocks on a 4 KiB guest, which also map onto 2 MiB

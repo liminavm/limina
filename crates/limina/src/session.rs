@@ -31,6 +31,8 @@ use crate::{control, forward};
 pub struct SessionConfig {
     pub vmm_bin: PathBuf,
     pub base_args: Vec<String>,
+    /// The guest's memory; each spawn takes its layout from it (`crate::elastic_mem`).
+    pub mem: crate::elastic_mem::MemSpec,
     /// The worker listeners reached over a link, re-armed at every spawn (see
     /// [`WorkerSpec::links`]).
     pub links: Vec<(&'static str, Connector)>,
@@ -150,6 +152,8 @@ struct WorkerBase {
     gpu_metal: bool,
     /// See [`supervisor::WorkerSpec::machine`].
     machine: crate::vmlib::schema::Machine,
+    /// See [`supervisor::WorkerSpec::mem`].
+    mem: crate::elastic_mem::MemSpec,
 }
 
 /// Spawn a worker in `--display-window` mode and wire fresh scanout/input/ack socketpairs to
@@ -237,6 +241,7 @@ fn spawn_windowed_worker(
         nested_virt: base.nested_virt,
         gpu_metal: base.gpu_metal,
         machine: base.machine,
+        mem: base.mem.clone(),
     };
     let spawned = supervisor::spawn_worker(
         &spec,
@@ -315,6 +320,7 @@ impl WindowedSession {
         let SessionConfig {
             vmm_bin,
             base_args,
+            mem,
             links,
             grace,
             width,
@@ -355,6 +361,7 @@ impl WindowedSession {
             nested_virt,
             gpu_metal,
             machine,
+            mem,
         };
 
         // Close-to-suspend needs somewhere to persist the suspend and a snapshot path for the
@@ -465,6 +472,7 @@ impl WindowedSession {
                                 nested_virt: Some(crate::supervisor::spawned_nested_virt()),
                                 gpu_metal: Some(crate::supervisor::spawned_gpu_metal()),
                                 machine: Some(crate::supervisor::spawned_machine()),
+                                mem_layout: Some(crate::elastic_mem::spawned()),
                             };
                             match crate::vmlib::state::set_suspended(state_file, Some(sus)) {
                                 Ok(()) => {

@@ -931,6 +931,18 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     // Runtime balloon control (M6 dynamic memory): if a control listener was requested, wire it to
     // the live virtio-balloon's control handle. A dedicated UNIX stream, mirroring the display
     // resize one. libkrun stays mechanism-only; the target policy lives in the supervisor.
+    // The guest probes virtio-mem after its kernel boots, long after this, and plugs what it is
+    // asked for then.
+    if let Some(mib) = spec.virtio_mem_requested_mib
+        && let Some(mem) = vmm.lock().unwrap().mem_control_handle()
+    {
+        let asked = mem.set_requested_size(mib << 20);
+        log::info!(
+            "virtio-mem: the guest is asked to plug {} MiB from boot",
+            asked >> 20
+        );
+    }
+
     if let Some(at) = spec.balloon_control_socket.as_ref() {
         let vmm = vmm.lock().unwrap();
         match vmm.balloon_control_handle() {
@@ -1496,6 +1508,7 @@ mod tests {
             deflate_on_oom: false,
             guest_ram_blocks: None,
             virtio_mem_mib: None,
+            virtio_mem_requested_mib: None,
             snapshot_file: None,
             restore_file: None,
             host_sleep_s2idle: false,

@@ -392,6 +392,11 @@ struct Cli {
     #[arg(long, value_parser = parse_virtio_mem_mib)]
     virtio_mem_mib: Option<u64>,
 
+    /// How much of the virtio-mem region to ask the guest to plug from boot, in MiB; the
+    /// balloon control socket's `mem` command changes it later. Absent: none.
+    #[arg(long, requires = "virtio_mem_mib")]
+    virtio_mem_requested_mib: Option<u64>,
+
     /// Attach a NIC (`eth0`) on a vmnet interface this worker starts: `shared` (NAT),
     /// `host` (host-only) or `bridged:<interface>` (the LAN, through that host interface).
     #[arg(long, conflicts_with_all = ["net_netd", "net_auto"])]
@@ -1017,6 +1022,7 @@ fn main() -> Result<()> {
         deflate_on_oom: cli.balloon_deflate_on_oom,
         guest_ram_blocks: cli.guest_ram_blocks.map(|b| b.0),
         virtio_mem_mib: cli.virtio_mem_mib,
+        virtio_mem_requested_mib: cli.virtio_mem_requested_mib,
         snapshot_file: cli.snapshot_file,
         restore_file: cli.restore,
         host_sleep_s2idle,

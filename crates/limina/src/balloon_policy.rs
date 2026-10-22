@@ -60,6 +60,9 @@ const RELEASE_COOLDOWN: Duration = Duration::from_secs(300);
 const TRICKLE_STEP_PAGES: u32 = 32 * PAGES_PER_MIB;
 /// A commanded-but-unfilled target gap smaller than this is noise (pages; same as the dead band).
 const GAP_EPS_PAGES: u32 = DEAD_BAND_PAGES;
+/// How long a split boot's policy waits for the guest to plug its virtio-mem region before it
+/// acts on what is plugged (`elastic_mem`).
+const MEM_SETTLE_WAIT: Duration = Duration::from_secs(120);
 /// How long a target>actual gap must sit with NO fill progress before the target decays to
 /// `actual`. The driver fills a 256 MiB step in ~140 ms when it can; ten seconds of a stuck gap
 /// is the driver's permanent 5 Hz retry loop ("Out of puff"), not a slow fill.
@@ -492,6 +495,9 @@ struct WorkerStats {
     compressed_bytes: u64,
     /// The worker's phys_footprint — the demand sweep's gap sensor (0 = not reported).
     footprint_bytes: u64,
+    /// The virtio-mem region's plugged and requested sizes (0 without the device).
+    mem_plugged_bytes: u64,
+    mem_requested_bytes: u64,
 }
 
 struct State {
@@ -554,6 +560,12 @@ struct State {
     host_debounce: HostDebounce,
     /// `LIMINA_BALLOON_TRACE` decision journal: one JSON line per consumed report.
     trace: Option<std::fs::File>,
+    /// The worker spawn this state describes (`elastic_mem::spawns`), and since when.
+    spawn: u64,
+    spawn_at: Instant,
+    /// Whether a split boot's virtio-mem region has been plugged as asked at boot, or the policy
+    /// has stopped waiting for it ([`MEM_SETTLE_WAIT`]).
+    mem_settled: bool,
 }
 
 /// One armed elasticity observation: the free level and driver fill at the moment an inflation
@@ -773,13 +785,21 @@ impl BalloonPolicy {
                 shortfall_run: 0,
                 shortfall_settle: 0,
                 trace,
+                spawn: 0,
+                spawn_at: Instant::now(),
+                mem_settled: false,
             })),
         }
     }
 
-    /// The most the balloon may inflate to, leaving the guest with `min`.
+    /// The most the balloon may inflate to, leaving the guest with `min`. In a split layout the
+    /// range is virtio-mem's region, which may be a little smaller (`elastic_mem`).
     fn room(&self) -> u32 {
-        self.max_pages.saturating_sub(self.min_pages)
+        let range = self.max_pages.saturating_sub(self.min_pages);
+        match crate::elastic_mem::spawned().elastic_bytes() {
+            Some(region) => range.min((region >> 12).min(u32::MAX as u64) as u32),
+            None => range,
+        }
     }
 
     /// Decide the next target from a pressure report and drive it. Pure decision in
@@ -817,10 +837,33 @@ impl BalloonPolicy {
         // measure. A failed query degrades softly — everything bases off `current` and gap
         // tracking freezes — never a stalled policy.
         let wstats = self.query_stats(&mut st);
+        // A fresh worker starts with nothing reclaimed. A split one plugs its region while the
+        // guest comes up, and until it has, `actual` reads as reclaim nobody asked for: wait for
+        // the plug, or [`MEM_SETTLE_WAIT`].
+        let spawn = crate::elastic_mem::spawns();
+        if st.spawn != spawn {
+            st.spawn = spawn;
+            st.spawn_at = now;
+            st.mem_settled = false;
+            if crate::elastic_mem::spawned().elastic_bytes().is_some() {
+                st.target_pages = 0;
+            }
+        }
+        if crate::elastic_mem::spawned().elastic_bytes().is_some() && !st.mem_settled {
+            let plugged = wstats
+                .as_ref()
+                .is_some_and(|w| w.mem_plugged_bytes >= w.mem_requested_bytes);
+            if !plugged && now.duration_since(st.spawn_at) < MEM_SETTLE_WAIT {
+                return;
+            }
+            st.mem_settled = true;
+        }
         let actual_pages = wstats
             .as_ref()
             .map(|w| (w.actual_bytes >> 12).min(u32::MAX as u64) as u32);
-        if self.scrub_enabled {
+        // A scrub probes with a balloon the guest barely notices; through virtio-mem it would
+        // unplug and replug whole blocks, so a split boot does not scrub.
+        if self.scrub_enabled && crate::elastic_mem::spawned().elastic_bytes().is_none() {
             let params = scrub_params(self.mode);
             let fill = actual_pages.unwrap_or(st.target_pages);
             let inflate_to = scrub_target_pages(
@@ -1307,6 +1350,8 @@ impl BalloonPolicy {
             sweep_faults: 0,
             compressed_bytes: 0,
             footprint_bytes: 0,
+            mem_plugged_bytes: 0,
+            mem_requested_bytes: 0,
         };
         for tok in line.split_whitespace() {
             let Some((k, v)) = tok.split_once('=') else {
@@ -1326,8 +1371,14 @@ impl BalloonPolicy {
                 "sweep_faults" => s.sweep_faults = v,
                 "compressed" => s.compressed_bytes = v,
                 "footprint" => s.footprint_bytes = v,
+                "mem_plugged" => s.mem_plugged_bytes = v,
+                "mem_requested" => s.mem_requested_bytes = v,
                 _ => {}
             }
+        }
+        // In a split layout what is reclaimed is the part of the region left unplugged.
+        if let Some(region) = crate::elastic_mem::spawned().elastic_bytes() {
+            s.actual_bytes = region.saturating_sub(s.mem_plugged_bytes);
         }
         Some(s)
     }
@@ -1337,7 +1388,7 @@ impl BalloonPolicy {
 /// the command went out. A free function (not a method) so the scrub watchdog thread, which only
 /// holds the state `Arc` and the socket path, can call it too.
 fn send_target(socket: &Endpoint, st: &mut State, pages: u32) -> bool {
-    let bytes = (pages as u64) << 12;
+    let line = target_line(crate::elastic_mem::spawned().elastic_bytes(), pages);
     for attempt in 0..2 {
         if st.conn.is_none() {
             match socket.connect() {
@@ -1351,15 +1402,29 @@ fn send_target(socket: &Endpoint, st: &mut State, pages: u32) -> bool {
             }
         }
         let conn = st.conn.as_mut().unwrap();
-        if writeln!(conn, "target {bytes}")
-            .and_then(|()| conn.flush())
-            .is_ok()
-        {
+        if writeln!(conn, "{line}").and_then(|()| conn.flush()).is_ok() {
             return true;
         }
         st.conn = None; // broken pipe — drop and retry once
     }
     false
+}
+
+/// The control line that reclaims `pages`: a balloon target, or, in a split layout
+/// (`elastic_mem`), asking the guest to plug that much less of its virtio-mem region. The plug
+/// is rounded up to the device's block, so it never reclaims more than asked.
+fn target_line(region: Option<u64>, pages: u32) -> String {
+    let bytes = (pages as u64) << 12;
+    match region {
+        Some(region) => {
+            let plug = region
+                .saturating_sub(bytes)
+                .next_multiple_of(crate::elastic_mem::BLOCK_BYTES)
+                .min(region);
+            format!("mem {plug}")
+        }
+        None => format!("target {bytes}"),
+    }
 }
 
 /// Write `settle` (run a ledger settle sweep; no reply) to the balloon socket, reconnecting
@@ -2480,6 +2545,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_split_layout_reclaims_by_plugging_less() {
+        const MIB: u64 = 1 << 20;
+        let pages = |mib: u32| mib * PAGES_PER_MIB;
+        assert_eq!(
+            target_line(None, pages(512)),
+            format!("target {}", 512 * MIB)
+        );
+        let region = Some(4096 * MIB);
+        assert_eq!(target_line(region, 0), format!("mem {}", 4096 * MIB));
+        assert_eq!(
+            target_line(region, pages(1024)),
+            format!("mem {}", 3072 * MIB)
+        );
+        // A reclaim that is not whole blocks plugs the block it would cut into.
+        assert_eq!(
+            target_line(region, pages(1) + 1),
+            format!("mem {}", 4096 * MIB)
+        );
+        assert_eq!(target_line(region, pages(8192)), "mem 0");
+    }
+
+    #[test]
     fn only_aggressive_reclaim_cuts_the_elastic_range_fine() {
         const MIB: u64 = 1 << 20;
         assert_eq!(
@@ -2535,6 +2622,9 @@ mod tests {
                 shortfall_run: 0,
                 shortfall_settle: 0,
                 trace: None,
+                spawn: 0,
+                spawn_at: now,
+                mem_settled: false,
             }
         }
     }
@@ -3700,6 +3790,8 @@ mod tests {
             sweep_faults: 5,
             compressed_bytes: 3 << 29,
             footprint_bytes: 20 << 30,
+            mem_plugged_bytes: 0,
+            mem_requested_bytes: 0,
         };
         trace_decision(
             &mut st,

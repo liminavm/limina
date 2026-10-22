@@ -73,6 +73,11 @@ pub struct VmState {
     /// touched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tap_drag: Option<bool>,
+    /// Whether the guest has bound a virtio-mem device (`crate::elastic_mem`): its boots then
+    /// take RAM at the VM's minimum and plug the rest. `None` until a boot has shown it, and
+    /// again after one that ran long without binding it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtio_mem: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -151,6 +156,11 @@ pub struct Suspended {
     /// a record written before it was kept, when every managed VM ran on a device tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<super::schema::Machine>,
+    /// How the guest's memory was laid out (`crate::elastic_mem`). Its memory map is part of
+    /// the snapshot, so the resume follows this, whatever has been learned since. `None` in a
+    /// record written before it was kept, when every VM took all its RAM up front.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_layout: Option<crate::elastic_mem::MemLayout>,
 }
 
 /// Load the state file. Missing, unreadable, or corrupt → `None` (state is
@@ -261,6 +271,16 @@ pub fn set_tap_drag(path: &Path, on: bool) -> std::io::Result<()> {
     save(path, &state)
 }
 
+/// Merge-save what was learned of the guest's virtio-mem driver, leaving everything else alone.
+pub fn set_virtio_mem(path: &Path, bound: Option<bool>) -> std::io::Result<()> {
+    let mut state = load(path).unwrap_or_default();
+    if state.virtio_mem == bound {
+        return Ok(());
+    }
+    state.virtio_mem = bound;
+    save(path, &state)
+}
+
 /// Atomic save (tmp + rename, the `VmBundle::save` pattern). Best-effort at the
 /// call sites — losing a window-placement save is not worth failing anything.
 pub fn save(path: &Path, state: &VmState) -> std::io::Result<()> {
@@ -308,6 +328,7 @@ mod tests {
             guest_pointer: false,
             guest_taps: None,
             tap_drag: None,
+            virtio_mem: None,
         };
         save(&path, &state).unwrap();
         assert_eq!(load(&path), Some(state));
@@ -338,6 +359,7 @@ mod tests {
             guest_pointer: false,
             guest_taps: None,
             tap_drag: None,
+            virtio_mem: None,
         };
         save(&path, &state).expect("a top-bit identity key must be persistable");
         assert_eq!(load(&path), Some(state));
@@ -409,6 +431,7 @@ mod tests {
                 guest_pointer: false,
                 guest_taps: None,
                 tap_drag: None,
+                virtio_mem: None,
             },
         )
         .unwrap();
@@ -422,6 +445,7 @@ mod tests {
                 nested_virt: None,
                 gpu_metal: None,
                 machine: None,
+                mem_layout: None,
             }),
         )
         .unwrap();
@@ -435,6 +459,7 @@ mod tests {
                 nested_virt: None,
                 gpu_metal: None,
                 machine: None,
+                mem_layout: None,
             })
         );
         // Clear it — window still preserved.
@@ -607,6 +632,7 @@ mod tests {
                 nested_virt: None,
                 gpu_metal: None,
                 machine: None,
+                mem_layout: None,
             }),
         )
         .unwrap();
@@ -626,6 +652,7 @@ mod tests {
                 nested_virt: None,
                 gpu_metal: None,
                 machine: None,
+                mem_layout: None,
             }),
             "suspend record survives a window save"
         );
@@ -648,6 +675,7 @@ mod tests {
             nested_virt: None,
             gpu_metal: None,
             machine: None,
+            mem_layout: None,
         };
         set_suspended(&path, Some(rec.clone())).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();

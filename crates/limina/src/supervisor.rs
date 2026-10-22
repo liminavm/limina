@@ -92,6 +92,7 @@ pub fn keep_refused_snapshot(snapshot: &std::path::Path, state_file: Option<&std
                 nested_virt: None,
                 gpu_metal: None,
                 machine: None,
+                mem_layout: None,
             });
         if let Err(e) = crate::vmlib::state::set_suspended(state, Some(sus)) {
             log::error!("re-recording the suspended state failed: {e}");
@@ -337,6 +338,9 @@ pub struct WorkerSpec {
     /// The machine a cold-booted guest is described with (`--acpi` for ACPI). Decided per spawn
     /// like [`Self::nested_virt`] ([`machine_for_spawn`]).
     pub machine: Machine,
+    /// The guest's memory, whose layout is decided per spawn like [`Self::nested_virt`]: a
+    /// resume takes the one it was suspended with (`crate::elastic_mem`).
+    pub mem: crate::elastic_mem::MemSpec,
     /// Worker listeners reached over a link instead of a path (`limina_launch::connect`), as
     /// `(worker flag, connector)`. Every spawn arms a fresh link for each and passes its end as
     /// `<flag> <fd>`, so a relaunched worker is reachable through the same connector.
@@ -783,6 +787,11 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
         args.push("--gpu-metal".into());
     }
     SPAWNED_GPU_METAL.store(gpu_metal, Ordering::SeqCst);
+    let mem_layout = spec
+        .mem
+        .layout(resumed.then(|| record.as_ref().and_then(|r| r.mem_layout)));
+    args.extend(spec.mem.worker_args(mem_layout).into_iter().map(Into::into));
+    crate::elastic_mem::note_spawn(&spec.mem, mem_layout);
 
     // When running from an assembled limina.app, hand the worker the bundle-relative venus
     // env (KK ICD + zink-on-KK Mesa selectors). In a dev/cargo run no bundle is present, so
@@ -1237,6 +1246,7 @@ pub fn run(
             nested_virt: spec.nested_virt,
             gpu_metal: spec.gpu_metal,
             machine: spec.machine,
+            mem: spec.mem.clone(),
         };
         let spawned = spawn_worker(&this_spawn, &inherit)?;
         if let Some(pipes) = pipes {
@@ -1333,6 +1343,7 @@ mod tests {
             nested_virt: None,
             gpu_metal,
             machine: None,
+            mem_layout: None,
         };
         assert!(gpu_metal_for_spawn(true, false, Some(&rec(Some(false)))));
         assert!(!gpu_metal_for_spawn(true, true, Some(&rec(None))));
@@ -1349,6 +1360,7 @@ mod tests {
             nested_virt,
             gpu_metal: None,
             machine: None,
+            mem_layout: None,
         };
         assert!(nested_virt_for_spawn(true, false, None));
         assert!(!nested_virt_for_spawn(false, false, Some(&rec(Some(true)))));
@@ -1370,6 +1382,7 @@ mod tests {
             nested_virt: None,
             gpu_metal: None,
             machine,
+            mem_layout: None,
         };
         assert_eq!(machine_for_spawn(Acpi, false, None), Acpi);
         assert_eq!(
@@ -1455,6 +1468,7 @@ mod tests {
                 nested_virt: None,
                 gpu_metal: None,
                 machine: None,
+                mem_layout: None,
             }),
         )
         .unwrap();
@@ -1522,6 +1536,7 @@ mod tests {
             nested_virt: None,
             gpu_metal: None,
             machine: None,
+            mem_layout: None,
         };
         crate::vmlib::state::set_suspended(&state, Some(rec.clone())).unwrap();
         take_pending_resume(&snap, Some(&state)).expect("a pending resume");
@@ -1547,6 +1562,7 @@ mod tests {
                 nested_virt: None,
                 gpu_metal: None,
                 machine: None,
+                mem_layout: None,
             }),
         )
         .unwrap();

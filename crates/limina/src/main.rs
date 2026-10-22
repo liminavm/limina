@@ -19,6 +19,7 @@ mod clipboard;
 mod control;
 mod debug_ctl;
 mod debug_port;
+mod elastic_mem;
 mod fido;
 mod forward;
 mod host_state;
@@ -2049,12 +2050,19 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         .map(|p| p.with_little_vcpus(little));
 
     // Forward the VM options to the worker's CLI.
-    let mut args: Vec<String> = vec![
-        "--cpus".into(),
-        cli.cpus.to_string(),
-        "--ram-mib".into(),
-        ram_mib.to_string(),
-    ];
+    // `--ram-mib` and the rest of the memory flags are decided per spawn (`elastic_mem`).
+    let mut args: Vec<String> = vec!["--cpus".into(), cli.cpus.to_string()];
+    let mem = elastic_mem::MemSpec {
+        ram_mib: ram_mib as u64,
+        range: mem_range.map(|(min, max)| (min as u64, max as u64)),
+        reclaim: cli.reclaim,
+        owned_blocks: std::env::var("LIMINA_GUEST_RAM").as_deref() != Ok("anon"),
+        fixed_region_mib: std::env::var("LIMINA_VIRTIO_MEM")
+            .ok()
+            .and_then(|v| v.parse().ok()),
+        state_file: cli.suspend_state_file.clone(),
+        socket: balloon_socket.clone(),
+    };
     // A logo the firmware would refuse is refused here, before anything starts: the window
     // pre-paints it, and a firmware that drew its own logo instead would undo that.
     let boot_logo = cli
@@ -2371,29 +2379,6 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push("--balloon-free-page-reporting".into());
     }
 
-    // Guest RAM from owned memory blocks (docs/design/guest-ram-objects.md), which bill a page
-    // the worker and the guest both touch once. LIMINA_GUEST_RAM=anon keeps the anonymous
-    // mapping, which bills it twice and releases through MADV_FREE_REUSABLE.
-    if std::env::var("LIMINA_GUEST_RAM").as_deref() != Ok("anon") {
-        let min = mem_range.map(|(min, _)| min as u64);
-        let spans = balloon_policy::guest_ram_blocks(cli.reclaim, min)
-            .iter()
-            .map(|(offset, block)| format!("{offset}:{block}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        log::info!("guest RAM: owned blocks {spans}");
-        args.push("--guest-ram-blocks".into());
-        args.push(spans);
-    }
-
-    // A virtio-mem device over LIMINA_VIRTIO_MEM MiB above RAM, plugged through the balloon
-    // control socket. A prototype for docs/design/guest-ram-objects.md §4.5; no policy drives it.
-    if let Ok(mib) = std::env::var("LIMINA_VIRTIO_MEM") {
-        log::info!("virtio-mem: a {mib} MiB region");
-        args.push("--virtio-mem-mib".into());
-        args.push(mib);
-    }
-
     // DEFLATE_ON_OOM escape hatch (see the flag doc: default off so balloon accounting stays
     // transparent and systemd-oomd doesn't fire against phantom memory use).
     if cli.balloon_deflate_on_oom {
@@ -2612,6 +2597,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             edge_resistance,
             vmm_bin,
             base_args: args,
+            mem,
             links,
             grace,
             width,
@@ -2692,6 +2678,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         nested_virt: cli.nested_virt,
         gpu_metal: cli.gpu_metal,
         machine,
+        mem,
         links,
     };
 
@@ -2713,6 +2700,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                 nested_virt: Some(supervisor::spawned_nested_virt()),
                 gpu_metal: Some(supervisor::spawned_gpu_metal()),
                 machine: Some(crate::supervisor::spawned_machine()),
+                mem_layout: Some(crate::elastic_mem::spawned()),
             };
             match vmlib::state::set_suspended(state_file, Some(sus)) {
                 Ok(()) => log::info!("VM suspended; snapshot at {}", snapshot.display()),
@@ -3471,6 +3459,7 @@ mod tests {
                 nested_virt: None,
                 gpu_metal: None,
                 machine: None,
+                mem_layout: None,
             }),
         )
         .unwrap();

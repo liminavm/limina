@@ -638,6 +638,7 @@ pub(crate) mod tests {
                 nested_virt: None,
                 gpu_metal: None,
                 machine: None,
+                mem_layout: None,
             }),
         )
         .unwrap();
