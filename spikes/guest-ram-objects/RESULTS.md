@@ -21,7 +21,7 @@ Run: `./build.sh`, then `./probe <leg> [compressed]`, sandbox off.
 
 | leg | host + guest touch the same 1 GiB | REUSABLE while mapped | release of 1 GiB | content after |
 |---|---|---|---|---|
-| anon | footprint **+1024 M twice: 2x** | footprint −2048 M, resident unchanged | resident stays 1030 M; 8.7 ms | old bytes |
+| anon | footprint **+1024 M twice: 2x** | footprint −2048 M, resident unchanged | one full share stays resident (1030 M), reusable but not freed; 8.7 ms | old bytes |
 | hvalloc | footprint +1024 M, then **+0.5 M: 1x** | nothing | footprint −1025 M, **resident −2048 M**; 14 ms | zeros |
 | tagged:2048 | **1x** | nothing | as hvalloc; 14 ms | zeros |
 | tagged:16 | **1x** | nothing | as hvalloc; **256 ms** | zeros |
@@ -41,6 +41,18 @@ Run: `./build.sh`, then `./probe <leg> [compressed]`, sandbox off.
 - anon's REUSABLE on a stage-2-mapped range now debits the footprint at once while the pages stay
   resident. `spikes/hv-ledger-marker` (macOS 26.5) measured no debit at all for the same step.
   The OS changed here; whatever relied on the old behaviour should be re-measured.
+
+**At 24 GiB** (`./probe <leg> resident 24`; only the 1 GiB range is touched):
+
+| leg | allocate | one `hv_vm_map` | release 1 GiB |
+|---|---|---|---|
+| anon | 0 | 0.08 ms | 8 ms |
+| hvalloc (128 MiB entries) | 1 ms | 0.2 ms | 13 ms |
+| tagged:2048 (12,288 entries) | 39 ms | 3.5 ms | 13 ms |
+| tagged:16 (1,572,864 entries) | 3.2 s | 491 ms | 244 ms |
+
+2 MiB blocks cost a 24 GiB VM 43 ms at boot; 16 KiB blocks cost 3.7 s and a quarter second per
+released GiB.
 
 **Compressed cell, partial.** `MADV_PAGEOUT` is refused from userspace (`ENOTSUP`), and 40 GiB of
 ballast compressed only ~150 MB of H: the kernel compressed the other VMs' idle memory first. On
