@@ -2385,6 +2385,14 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push(spans);
     }
 
+    // A virtio-mem device over LIMINA_VIRTIO_MEM MiB above RAM, plugged through the balloon
+    // control socket. A prototype for docs/design/guest-ram-objects.md §4.5; no policy drives it.
+    if let Ok(mib) = std::env::var("LIMINA_VIRTIO_MEM") {
+        log::info!("virtio-mem: a {mib} MiB region");
+        args.push("--virtio-mem-mib".into());
+        args.push(mib);
+    }
+
     // DEFLATE_ON_OOM escape hatch (see the flag doc: default off so balloon accounting stays
     // transparent and systemd-oomd doesn't fire against phantom memory use).
     if cli.balloon_deflate_on_oom {

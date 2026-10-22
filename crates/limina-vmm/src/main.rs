@@ -387,6 +387,11 @@ struct Cli {
     #[arg(long, value_parser = parse_guest_ram_blocks)]
     guest_ram_blocks: Option<GuestRamBlocks>,
 
+    /// Attach a virtio-mem device over this many MiB of guest memory above RAM, a multiple of
+    /// 128. The guest plugs none of it until the balloon control socket's `mem <bytes>` asks.
+    #[arg(long, value_parser = parse_virtio_mem_mib)]
+    virtio_mem_mib: Option<u64>,
+
     /// Attach a NIC (`eth0`) on a vmnet interface this worker starts: `shared` (NAT),
     /// `host` (host-only) or `bridged:<interface>` (the LAN, through that host interface).
     #[arg(long, conflicts_with_all = ["net_netd", "net_auto"])]
@@ -483,6 +488,18 @@ fn parse_forward(s: &str) -> Result<(SocketAddrV4, u16)> {
 /// A `--guest-ram-blocks` layout: `(offset, block)` spans in bytes.
 #[derive(Clone, Debug)]
 struct GuestRamBlocks(Vec<(u64, u64)>);
+
+/// Linux hot-adds memory on arm64 in 128 MiB blocks; a region of any other size loses its tail.
+fn parse_virtio_mem_mib(s: &str) -> Result<u64> {
+    let mib: u64 = s
+        .parse()
+        .with_context(|| format!("{s:?} is not a number of MiB"))?;
+    anyhow::ensure!(
+        mib > 0 && mib.is_multiple_of(128),
+        "the virtio-mem region must be a positive multiple of 128 MiB, not {mib}"
+    );
+    Ok(mib)
+}
 
 fn parse_guest_ram_blocks(s: &str) -> Result<GuestRamBlocks> {
     s.split(',')
@@ -999,6 +1016,7 @@ fn main() -> Result<()> {
         free_page_reporting: cli.balloon_free_page_reporting,
         deflate_on_oom: cli.balloon_deflate_on_oom,
         guest_ram_blocks: cli.guest_ram_blocks.map(|b| b.0),
+        virtio_mem_mib: cli.virtio_mem_mib,
         snapshot_file: cli.snapshot_file,
         restore_file: cli.restore,
         host_sleep_s2idle,
@@ -1032,6 +1050,13 @@ mod tests {
         );
         assert!(parse_guest_ram_blocks("0").is_err());
         assert!(parse_guest_ram_blocks("0:2M").is_err());
+    }
+
+    #[test]
+    fn virtio_mem_regions_are_whole_memory_blocks() {
+        assert_eq!(parse_virtio_mem_mib("4096").unwrap(), 4096);
+        assert!(parse_virtio_mem_mib("0").is_err());
+        assert!(parse_virtio_mem_mib("100").is_err());
     }
 
     #[test]

@@ -28,11 +28,11 @@ use devices::virtio::block::{DiskFormat, SyncMode};
 use devices::virtio::gpu::timing::TimingPage;
 use devices::virtio::net::backend::ExternalBackend;
 use devices::virtio::net::vmnet::{Vmnet, VmnetConfig, VmnetMode as KrunVmnetMode};
-use devices::virtio::{BalloonControlHandle, DisplayResizeHandle};
+use devices::virtio::{BalloonControlHandle, DisplayResizeHandle, MemControlHandle};
 use krun_lib::api::device_builders::{
     BalloonDevice, BlockDevice, DisplayBackend, FsDevice, GpuDevice, I2cBatteryDevice, InputDevice,
     MmioDeviceManager, NetDevice, NetFlags, RngDevice, SndDevice, TsiFlags, VirglRendererFlags,
-    VsockDevice,
+    VirtioMemDevice, VsockDevice,
 };
 use krun_lib::vmm;
 use limina_display::{CaptureConfig, WindowConfig};
@@ -400,6 +400,9 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
 
     let mut devices = Devices::new();
     devices.add(balloon);
+    if let Some(mib) = spec.virtio_mem_mib {
+        devices.add(VirtioMemDevice::new((mib << 20) as usize));
+    }
     if let Some(battery) = battery {
         devices.add(battery);
     }
@@ -929,8 +932,9 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     // the live virtio-balloon's control handle. A dedicated UNIX stream, mirroring the display
     // resize one. libkrun stays mechanism-only; the target policy lives in the supervisor.
     if let Some(at) = spec.balloon_control_socket.as_ref() {
-        match vmm.lock().unwrap().balloon_control_handle() {
-            Some(handle) => install_balloon_listener(at.clone(), handle)
+        let vmm = vmm.lock().unwrap();
+        match vmm.balloon_control_handle() {
+            Some(handle) => install_balloon_listener(at.clone(), handle, vmm.mem_control_handle())
                 .context("installing the balloon control listener")?,
             None => log::error!(
                 "balloon control requested but the balloon control handle is unavailable; \
@@ -1254,10 +1258,16 @@ fn install_resize_listener(
 /// - `target <bytes>` → set the balloon target (rounded to 4 KiB pages); the guest inflates/deflates.
 /// - `stats`          → reply `target=<bytes> actual=<bytes> reclaimed=<bytes>` (the last commanded
 ///   target, the guest's self-reported balloon size, and total reclaimed) on the same connection.
+/// - `mem <bytes>`    → ask the guest to plug that much of the virtio-mem region, when there is one;
+///   `stats` then also reports `mem_region`, `mem_requested` and `mem_plugged`.
 ///
 /// Runs on a detached thread for the VMM's lifetime; the supervisor policy and the test harness
 /// connect to it. Mirrors [`install_resize_listener`].
-fn install_balloon_listener(at: ListenAt, handle: BalloonControlHandle) -> Result<()> {
+fn install_balloon_listener(
+    at: ListenAt,
+    handle: BalloonControlHandle,
+    mem: Option<MemControlHandle>,
+) -> Result<()> {
     let place = at.to_string();
     let listener = at
         .listen()
@@ -1281,10 +1291,11 @@ fn install_balloon_listener(at: ListenAt, handle: BalloonControlHandle) -> Resul
                 // so a single-threaded accept loop would block all other clients (e.g. a `stats`
                 // query) behind it. Each connection is independent and cheap.
                 let handle = handle.clone();
+                let mem = mem.clone();
                 let target_bytes = target_bytes.clone();
                 if let Err(e) = std::thread::Builder::new()
                     .name("balloon-conn".into())
-                    .spawn(move || serve_balloon_conn(stream, handle, target_bytes))
+                    .spawn(move || serve_balloon_conn(stream, handle, mem, target_bytes))
                 {
                     log::error!("balloon: cannot spawn connection thread: {e}");
                 }
@@ -1362,6 +1373,7 @@ fn task_compressed_and_footprint() -> (u64, u64) {
 fn serve_balloon_conn(
     stream: std::os::unix::net::UnixStream,
     handle: BalloonControlHandle,
+    mem: Option<MemControlHandle>,
     target_bytes: std::sync::Arc<std::sync::atomic::AtomicU64>,
 ) {
     use std::io::{BufRead, Write};
@@ -1390,15 +1402,30 @@ fn serve_balloon_conn(
                 log::info!("balloon: ledger settle sweep requested");
                 handle.settle_sweep();
             }
+            Some("mem") => match (&mem, parts.next().and_then(|s| s.parse::<u64>().ok())) {
+                (Some(mem), Some(bytes)) => {
+                    let asked = mem.set_requested_size(bytes);
+                    log::info!("virtio-mem: requested size {asked} bytes (asked for {bytes})");
+                }
+                (None, _) => log::warn!("virtio-mem: no device to take {line:?}"),
+                (_, None) => log::warn!("virtio-mem: ignoring malformed line {line:?}"),
+            },
             Some("stats") => {
                 let stats = handle.get_stats();
                 let actual_bytes = (stats.actual_pages as u64) << 12;
                 let (compressed, footprint) = task_compressed_and_footprint();
+                let mem_stats = mem.as_ref().map_or(String::new(), |mem| {
+                    let s = mem.stats();
+                    format!(
+                        " mem_region={} mem_requested={} mem_plugged={}",
+                        s.region_size, s.requested_size, s.plugged_size
+                    )
+                });
                 if let Err(e) = writeln!(
                     writer,
                     "target={} actual={actual_bytes} reclaimed={} heals={} released={} \
                      remapped={} strays={} sweeps={} sweep_debited={} sweep_ms={} \
-                     sweep_faults={} compressed={compressed} footprint={footprint}",
+                     sweep_faults={} compressed={compressed} footprint={footprint}{mem_stats}",
                     target_bytes.load(Ordering::Relaxed),
                     stats.reclaimed_bytes,
                     stats.heals,
@@ -1467,6 +1494,7 @@ mod tests {
             free_page_reporting: false,
             deflate_on_oom: false,
             guest_ram_blocks: None,
+            virtio_mem_mib: None,
             snapshot_file: None,
             restore_file: None,
             host_sleep_s2idle: false,

@@ -1958,6 +1958,11 @@ pub struct BalloonStats {
     pub compressed: u64,
     /// The worker's phys_footprint as the worker itself reads it (TASK_VM_INFO).
     pub footprint: u64,
+    /// The virtio-mem region's size, what the host asks the guest to plug of it, and what the
+    /// guest has plugged; all 0 without the device.
+    pub mem_region: u64,
+    pub mem_requested: u64,
+    pub mem_plugged: u64,
 }
 
 /// How the supervisor (and thus the VM) ended.
@@ -2513,6 +2518,16 @@ impl Guest {
         Ok(())
     }
 
+    /// Ask the guest to plug `bytes` of the virtio-mem region (see `LIMINA_VIRTIO_MEM`); read
+    /// back what it plugged with [`Guest::balloon_stats`].
+    pub fn set_mem_target(&self, bytes: u64) -> Result<()> {
+        use std::io::Write;
+        let mut stream = self.connect_balloon()?;
+        writeln!(stream, "mem {bytes}").context("sending the virtio-mem requested size")?;
+        stream.flush().ok();
+        Ok(())
+    }
+
     /// Read balloon stats from the worker. The `target`/`actual` gap is the oscillation /
     /// "Out of puff" signature — a held nonzero gap means the guest is chasing a target it
     /// cannot fill. M6 dynamic memory.
@@ -2547,6 +2562,9 @@ impl Guest {
                 "sweep_faults" => stats.sweep_faults = v,
                 "compressed" => stats.compressed = v,
                 "footprint" => stats.footprint = v,
+                "mem_region" => stats.mem_region = v,
+                "mem_requested" => stats.mem_requested = v,
+                "mem_plugged" => stats.mem_plugged = v,
                 _ => {}
             }
         }

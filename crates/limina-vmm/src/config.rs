@@ -369,6 +369,9 @@ pub struct VmSpec {
     /// guest both touch once, where an anonymous mapping bills it per mapping, and gives pages
     /// back by whole block. `None` keeps the anonymous mapping. The supervisor picks the layout.
     pub guest_ram_blocks: Option<Vec<(u64, u64)>>,
+    /// Attach a virtio-mem device over this many MiB of guest memory above RAM, which the guest
+    /// plugs as the balloon control socket's `mem` command asks. `None`: no device.
+    pub virtio_mem_mib: Option<u64>,
     /// Where to write the VM snapshot on a SIGUSR1 suspend trigger (M9 suspend/resume). When set,
     /// the worker installs the SIGUSR1 handler and a trigger thread; on signal it quiesces the
     /// vCPUs, serializes vCPU+GIC+RAM here, and exits [`WORKER_EXIT_SNAPSHOT`](126). `None` = no
