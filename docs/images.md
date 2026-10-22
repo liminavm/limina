@@ -73,16 +73,18 @@ Two facts the table cannot show:
 
 - **The guest agents are not RPMs and so are not in the table.** All four F44 enhanced images
   (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) carry **`limina-agent` 0.6.1**
-  and **`limina-agent-session` 0.1.3**, installed to `/usr/local/bin` with their units (payload
-  **r32**, delivered 2026-10-03). The dogfood guest:
+  and **`limina-agent-session` 0.1.4**, installed to `/usr/local/bin` with their units (payload
+  **r38**, delivered 2026-10-22). The dogfood guest:
   - is behind on `limina-agent`: 0.6.0, taken by hand on 2026-09-03 straight from 0.4.0 (its
     first agent with the `vcpu` cap);
-  - is current on `limina-agent-session`: 0.1.3, the r32 binary installed by hand 2026-10-03, with
-    0.1.2 and 0.1.1 kept beside it as `limina-agent-session.0.1.2.bak` / `.0.1.1.bak`.
+  - is current on `limina-agent-session`: 0.1.4, the r38 binary installed by hand 2026-10-22, with
+    0.1.3, 0.1.2 and 0.1.1 kept beside it as `limina-agent-session.0.1.3.bak` / `.0.1.2.bak` /
+    `.0.1.1.bak`.
 
-  0.1.3 reads idle inhibitors from every source the desktop offers (the compositor through
-  ext-idle-notify-v1, gnome-session, PowerDevil) and reports idle inhibited when any of them says
-  so; 0.1.2 read gnome-session alone. Earlier helper changes still in effect:
+  0.1.4 lets only the uid holding seat0 (`ACTIVE_UID` in logind's seat file) report the
+  arrangement, and re-sends when the seat changed between polls. 0.1.3 reads idle inhibitors from
+  every source the desktop offers (the compositor through ext-idle-notify-v1, gnome-session,
+  PowerDevil) and reports idle inhibited when any of them says so; 0.1.2 read gnome-session alone. Earlier helper changes still in effect:
   - 0.1.2 started the idle-inhibit relay (`idleinhibit`, the host's keep-the-display-awake
     signal), and shuts a host channel down rather than dropping one half of it;
   - 0.1.1's drop-after-accept backoff (r27) stops a host that drops a channel within 5 s of
@@ -133,7 +135,14 @@ is standing in as the compatibility floor.
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r37.tar.zst`** (r37, 2026-10-13: host-side
+**Current payload: `payload/limina-guest-tools-f44-r38.tar.zst`** (r38, 2026-10-22: host-side
+repack of r37 with `limina-agent-session` 0.1.4 at limina `d79f24e8`, which gates the arrangement
+report on seat0's `ACTIVE_UID` instead of the user's logind `STATE`, so a seatless session (`sudo -u`,
+`su`, ssh, cron) as a user with a background graphical session no longer lets that session's helper
+overwrite the fronted one's layout on the host; a change to the seat between polls re-sends. Kernel,
+mesa, `limina-agent` and the installer identical to r37. Applied to all four F44 enhanced images
+(`.bak-pre-r38.raw` CoW backups), both agent hashes verified, kernel install short-circuited, no
+trial boot owed.) Previous: r37 (2026-10-13: host-side
 repack of r36 with mesa `26.2.3-6.limina`, built from Fedora's `mesa-26.2.3-1.fc44` SRPM at
 `limina-guest` `14952457e03`: venus matches the X server's DRM device by its node rather than by PCI
 bus info, so an X11 swapchain on limina's virtio-mmio GPU gets native images instead of a prime
