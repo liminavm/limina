@@ -55,7 +55,11 @@ fn settle_sweep_debits_the_task_ledger_and_leaves_the_guest_unharmed() {
     let cfg = match GuestConfig::baseline_fedora_from_env() {
         Ok(mut cfg) => {
             cfg.ram_mib = 6144; // room for the blob without cache eviction
-            cfg.with_net().with_balloon_control()
+            // The second bill exists only on anonymous guest RAM; owned blocks never have one
+            // (tests/guest_ram_objects.rs), so the sweep skips them.
+            cfg.with_net()
+                .with_balloon_control()
+                .with_env("LIMINA_GUEST_RAM", "anon")
         }
         Err(e) => {
             eprintln!(

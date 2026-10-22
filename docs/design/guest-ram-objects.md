@@ -63,9 +63,13 @@ compressor slots (`vm_object.c:1485ff`), and owned objects are disowned on reap 
 
 **The design.**
 - Guest RAM is a reservation filled with tagged blocks, and the release unit is the whole block. A
-  stock 4 KiB guest's balloon gives back scattered pages, so a large block frees nothing until all
-  of it is back; small blocks keep per-page reclaim and cost more (§4.1: 16 KiB blocks take 3.2 s
-  to allocate and 491 ms to map at 24 GiB, against 39 ms and 3.5 ms for 2 MiB). The layout follows
+  stock 4 KiB guest's balloon takes single pages, so a large block frees nothing until all of it
+  is back; small blocks keep per-page reclaim and cost more (§4.1: 16 KiB blocks take 3.2 s
+  to allocate and 491 ms to map at 24 GiB, against 39 ms and 3.5 ms for 2 MiB). In practice the
+  balloon takes its pages from the guest's free lists, which hold a freed region as long runs, so
+  blocks complete: a stock guest that freed 3 GiB and was ballooned by 2 GiB gave back 2004 MiB on
+  2 MiB blocks and 2049 MiB on anonymous RAM (`tests/balloon_touched.rs`, measured 2026-10-22). A
+  guest whose free memory is fragmented is not measured. The layout follows
   the VM's reclaim mode, chosen when RAM is built, so a mode changed at runtime takes its layout at
   the next boot:
   - `aggressive`: 2 MiB blocks for the VM's minimum, 16 KiB blocks for the elastic `min..max`
