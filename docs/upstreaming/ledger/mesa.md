@@ -93,7 +93,7 @@ MR time.
 | mesa/fbobject: guard NULL pipe_resource in do_discard_framebuffer | tombstone pool | upstream-now, 7-line NULL guard (c9e4f184e593) |
 | zink: guard dmabuf semaphore import/export when external_semaphore_fd is absent | tombstone pool (two patches, one MR) | upstream-now (c9e4f184e593) |
 | zink/kopper: guard surface creation on the instance surface extensions | tombstone pool | upstream-now, could join the semaphore MR (c9e4f184e593) |
-| zink: re-look-up the pipeline when vertex elements change and vertex input is static | `limina-kk` | upstream-now; deterministic repro in `spikes/notification-text-corruption/` (1a4286e1abb) |
+| zink: re-look-up the pipeline when vertex elements change and vertex input is static | local `kk-hardening` only, not on `limina-kk` | upstream-now; deterministic repro in `spikes/notification-text-corruption/` (1a4286e1abb) |
 
 ## Enhanced-tier rubric
 

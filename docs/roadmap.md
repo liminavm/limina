@@ -8,12 +8,12 @@ what is still owed. Research lives in `docs/research/`; the render/present stack
 work in `docs/hardening-backlog.md`.
 
 **State in one paragraph.** Shipped and in daily use: M1 boot, M2 display+input, M2.5 console,
-M3 NAT+SSH, M4 venus 3D, M5 control plane/clipboard/virtiofs, M6 dynamic memory, the polish and
-audio halves of M8, M9 suspend/resume + snapshots, M10 disks, M11 the `cargo xtask` surface, M12's
-clipboard, M12.5's QEMU-guest-agent steps 1–4, M14 biometrics, the emulated xHCI of M7, and M15
-wave 1. Open: the rest of M15, M13, M17, the M12 file-transfer half. Deferred by decision: M3
-bridged networking (worker-held vmnet, no privilege needed) and M7 real-device USB capture
-(AccessoryAccess on macOS 27, root helper below). M16
+M3 networking (vmnet shared with a `limina-netd` fallback, SSH, and per-VM bridging), M4 venus 3D,
+M5 control plane/clipboard/virtiofs, M6 dynamic memory, the polish and audio halves of M8, M9
+suspend/resume + snapshots, M10 disks, M11 the `cargo xtask` surface, M12's clipboard, M12.5's
+QEMU-guest-agent steps 1–4, M14 biometrics, the emulated xHCI of M7, and M15 wave 1. Open: the rest
+of M15, M13, M17, the M12 file-transfer half, M3's networks as objects and arena NIC. Deferred by
+decision: M7 real-device USB capture (AccessoryAccess on macOS 27, root helper below). M16
 (LiminaOS) is the moonshot. M18 (Metal compute in the guest, for MLX) runs MLX itself: built for Linux with its Metal backend,
 it runs on the host GPU from a guest, passes 297 of the 298 cases in MLX's C++ test suite, and
 serves a 7B LLM through omlx at the speed it runs on macOS.
@@ -78,11 +78,11 @@ HVF tests need a codesigned worker, so they are gated on `LIMINA_HVF_TESTS=1` an
 `cargo xtask test` / `scripts/run-suite.sh`. Hosted CI (`.github/workflows/`) is a compile-and-unit
 gate only; it cannot run HVF or the host GPU. **Fix bugs RED-first** (CLAUDE.md).
 
-**Owed — host→guest synthetic input.** osascript keystrokes are unreliable (macOS eats F11, lone
-modifiers may not route). We own the guest keyboard/pointer evdev devices, so add a path that writes
-events straight into them, exposed as a control-plane message and a CLI/harness helper
-(`limina sendkey <combo>`, a `Guest` API). Small; unblocks scripted UI tests and deterministic agent
-control of the desktop.
+**Host→guest synthetic input** is `limina input` (`crates/limina/src/inject.rs`): evdev events
+written straight into the worker's virtio-input sockets over the per-VM runtime socket, off until
+the VM's `input-inject` lever is on, so scripted UI tests and agents drive the desktop without
+osascript (which loses F11 and lone modifiers). Guard: `l2_input_inject.rs`. Tests drive it through
+the CLI; the `Guest` harness has no API of its own for it.
 
 **Owed — guest profiling without a guest PMU.** HVF shows the guest no PMU, so guest `perf` falls
 back to hrtimer sampling, which is masked through hardirq and most softirq work — exactly the
@@ -232,7 +232,9 @@ bridged onto a host interface (`vm.toml` or the Configure sheet); it has no forw
   (`third_party/libkrun/src/smbios/src/lib.rs`), so what remains is plumbing the credential and
   confirming stock Fedora consumes it; (B) a host `ProxyCommand` helper that dials the guest's vsock
   ssh port, for a stable `ssh limina-<vm>`.
-- Enumerate TSI gaps (ICMP, mDNS, VPNs, multicast) for product expectations.
+- **State what a guest cannot do on each backend**, for product expectations: on `limina-netd`, no
+  IPv6, no broadcast or multicast (so no mDNS), ICMP echo only (no traceroute); on vmnet shared,
+  what a host VPN breaks (`docs/design/multi-vm-networking.md` §3.2 and §4).
 
 ---
 
@@ -451,7 +453,10 @@ max, ⌈max/2⌉, 2, 1.
 - **Snapshots:** the online set is not in the M9 snapshot, so the supervisor re-onlines every vCPU
   inside the suspend bracket and waits (bounded) before relaying SIGTSTP. Guard `l2_vcpu_policy.rs`
   suspends through the *supervisor* (the other seam signals the worker and skips the mitigation).
-  **Owed:** the snapshot-format change and a `CPU_ON` ALREADY_ON idempotency guard (#41).
+  **Owed** (task #41 in the code's comments, `control.rs` `restore_all_vcpus`): the
+  snapshot-format change, and a PSCI `CPU_ON` that answers `ALREADY_ON` for a vCPU that is already
+  on — libkrun's handler (`hvf/src/lib.rs`) marks the target online and answers success whatever its
+  state.
 
 #### Parking cores without hiding them — EAS instead of hotplug
 
@@ -472,10 +477,7 @@ report the same capacity or `em_dev_register_perf_domain()` refuses it.
 **Owed — the energy model**, the last gate (`sched_debug`: `pd_init: no EM found for CPU0`). Plan: a
 **DKMS module** registering a synthetic EM (`em_dev_register_perf_domain()` is `EXPORT_SYMBOL_GPL`),
 so EAS lands on a stock kernel; `em_rebuild_sched_domains()` is not exported, so
-`echo 1 > /proc/sys/kernel/sched_energy_aware` triggers the rebuild. Also owed: the libkrun
-`vcpu_sched.rs` comment that says xnu won't serve a time-constraint thread on an E-core is
-contradicted by observation (banded vCPUs were seen on E-cores); the rule "don't band a little vCPU"
-may stand, its stated reason needs a measurement.
+`echo 1 > /proc/sys/kernel/sched_energy_aware` triggers the rebuild.
 
 ---
 
@@ -512,9 +514,10 @@ standalone win: serial-over-virtio-console for FTDI/CP210x boards.
   pointer grab, the soft keyboard grab, display modes and multi-display, runtime resize, the notch.
   All of it is described in `docs/input-and-windows.md` and the design docs it points to. Scanout
   IOSurfaces go to the supervisor by Mach port (`limina-surfaceport`), not as global IOSurfaces.
-- Multi-finger trackpad gestures are consumed by the WindowServer upstream of any session tap;
-  an HID-level tap swallowing gesture event types suppresses them (measured), and
-  `docs/design/trackpad-gestures.md` holds the design and the open ownership decision.
+- **Trackpad gestures** (`docs/design/trackpad-gestures.md`): a guest multitouch touchpad fed from
+  `NSTouch`, with an HID-level tap that suppresses the host's gestures per finger count; the guest
+  owns two- and three-finger sequences, macOS keeps four. Scroll, pinch, taps and clicks work on the
+  stock tier.
 
 **Owed:**
 - **x86 binaries: guest-side FEX-Emu** (primary) + `qemu-user-static` via `binfmt_misc` — Rosetta for
@@ -709,9 +712,11 @@ suspend).
 
 ## Milestone 13 — Visibility- and power-aware render adaptation
 
-**Not started; design only.** Scale render/present work to what is needed now: throttle hard when
-the guest's output is not seen (occluded, another Space, minimized), cap or relax on battery / Low
-Power Mode, and cost nothing when the window is live on AC. Resume must be instant and clean. The
+**Policy and mechanism not built; the signals are sampled.** `window/host_observe.rs` already reads
+each window's occlusion, the thermal state and Low Power Mode every tick and logs changes, for
+observability only: nothing acts on them yet. Scale render/present work to what is needed now:
+throttle hard when the guest's output is not seen (occluded, another Space, minimized), cap or
+relax on battery / Low Power Mode, and cost nothing when the window is live on AC. Resume must be instant and clean. The
 rendering sibling of M6's "give back what you are not using".
 
 **Signals** (AppKit front-end; policy in limina): `NSWindow.occlusionState` + `isOnActiveSpace`
@@ -850,8 +855,11 @@ video/fullscreen, not a general compositing speedup.
 ### Wave 4 — primary-plane scanout formats
 
 Spike closed (`spikes/scanout-modifiers/`): non-LINEAR modifiers buy nothing; rendering directly
-into LINEAR/IOSurface scanout is the win; advertising `XBGR8888`/`ABGR8888` on the primary plane
-shipped (the enhanced kernel), killing the swizzle half of the compositor's present blit.
+into LINEAR/IOSurface scanout is the win. **Not shipped:** the kernel patch that advertises
+`XBGR8888`/`ABGR8888` on the primary plane ("drm/virtio: widen the primary plane format list") is
+off the kernel fork, kept under tag `limina/2026-08-04-modifiers` and deferred to the hardware-planes
+work (`docs/upstreaming/ledger/linux.md`, *Left the series*). What remains is pricing it where it
+matters, fullscreen client direct scanout, not the compositor's own present path.
 
 ### Wave 5 — small items
 
@@ -1292,9 +1300,14 @@ running GTK client alive.
 
 ## Milestone 17 — Video: finish decode, then encode
 
-**Established:** hardware decode of VP9 profile 0, AV1 main (M3+ hosts), H.264 Baseline/Main/High
-and HEVC Main runs on virglrs's VideoToolbox backend (`docs/graphics.md` §video,
-`docs/design/av1-decode.md`, `docs/design/h264-hevc-decode.md`). What sets each codec's cost is how
+**Established:** hardware decode of VP9 profile 0, AV1 main, H.264 Baseline/Main/High and HEVC
+Main runs on virglrs's VideoToolbox backend (`docs/graphics.md` §video,
+`docs/design/av1-decode.md`, `docs/design/h264-hevc-decode.md`). AV1 is decoded by the host on
+every host: by VideoToolbox on M3+ silicon until a super-resolution frame (whose picture VT returns
+wrongly), and by virglrs's dav1d from there on and on hosts with no AV1 silicon (a 10-bit stream,
+or a history past dav1d's cap, stays on VideoToolbox with that frame's picture withheld). VA-API decodes run
+asynchronously on a thread per codec for every target not lent to venus
+(`docs/design/async-video-decode.md`, phases 1 and 2). What sets each codec's cost is how
 much bitstream survives the guest's VA frontend: AV1's frame header is discarded, so it needs a full
 serializer and a reference-slot model; H.264/HEVC slices arrive whole (mesa prepends a start code and
 passes the buffer verbatim), so only the parameter sets are synthesized.
@@ -1311,8 +1324,10 @@ nothing for offload.
 **Owed, in order:**
 1. **MJPEG decode** — `jpegdec` is already in stock mesa, so this is stock-tier by construction and
    host-side only; each picture is an independent JPEG with no references.
-2. **The AV1 super-resolution refusal** must move after submission, and the dav1d fallback is a
-   decision to make (`docs/design/av1-decode.md` §Super-resolution).
+2. **Asynchronous decode for targets lent to venus** (`docs/design/async-video-decode.md` phases 3
+   and 4): mesa-guest fences END_FRAME and flags the codec, then virglrs decodes lent targets
+   asynchronously when the flag is set, so a guest Vulkan consumer of decoded video stops stalling
+   the control queue.
 3. **Encode** — plumbed everywhere except our backend (the protocol carries
    `PIPE_VIDEO_ENTRYPOINT_ENCODE`; `virgl_video_hw.h` defines the H.264/H.265 encode descriptors; the
    guest driver drives it); virglrs advertises no encode entrypoint. VideoToolbox *hands us* the

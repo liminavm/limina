@@ -59,16 +59,19 @@ that slot's `cursor.visible` is false, while the worn shape takes any slot with 
 (`cursor::shape_slot`). A guest cursor plane on the other CRTC — normal while absfit is still
 learning shares on a fresh two-display boot — hides the user's window. `cursor::undrawn_fault`
 logs that state once per episode ("the guest has its cursor plane on [..], not on the captured
-slot N"). Next: when it fires, read it against `[CURSOR] slot=N hide`, then decide whether the
-captured path gets `shape_slot`'s tolerance or the fix belongs upstream in the position.
+slot N").
 
-### A cursor plane left enabled just outside a display's edge
-A dogfood log from a single-session guest (2026-08-24) showed, 31 times, `other slots also showing a cursor:
-[(1, (-10, 582))]` while the pointer was legitimately at the far edge of slot 0. The neighbouring
-slot keeps a visible plane a few pixels outside its own scanout. Placement is unaffected (the echo
-names the real slot), but `shape_slot` treats it as a second cursor and it feeds the undrawn-cursor
-fault above. Decide whether the guest should hide it or the echo should ignore a plane whose origin
-is outside its scanout.
+A guest also keeps a neighbouring slot's plane lit a few pixels outside its own scanout while the
+pointer sits at the far edge of the next one (a dogfood single-session log, 2026-08-24: `other
+slots also showing a cursor: [(1, (-10, 582))]`, 31 times). The echo already discounts such a
+plane (`CursorEcho::shows_pointer`, `window/echo.rs`: a lit plane whose pointer position lies off
+its scanout is a neighbour's sprite, not the pointer). `cursor::shape_slot` and
+`cursor::undrawn_fault` do not: both are fed the raw `cursor.visible` flags (`window/mod.rs`), so
+such a plane still counts as a second cursor for the worn shape and still feeds the fault.
+
+Next: give `shape_slot` and `undrawn_fault` the echo's test, so an off-scanout plane counts for
+neither; then, when the fault fires, read it against `[CURSOR] slot=N hide` and decide whether the
+captured path gets `shape_slot`'s tolerance or the fix belongs upstream in the position.
 
 ### The mapping probe places its steps in union space, not per display
 `absfit::PROBE_SWEEP` keeps `v` within `0.30..0.70` of the union. On a display covering only part of
@@ -142,20 +145,21 @@ on it must still stand the grab down.
 Seen once on the two-panel rig (2026-08-23), fullscreen on both panels after a click had promoted the grab:
 releasing a hard grab with Ctrl-Opt left no cursor drawn; the pointer was live, and pushing it up to
 reveal the chrome brought the image back. The per-tick blank-wear check and the unhide fix
-(`64aee92`) are both in, so this is a path that skips both or a macOS unhide that did not take.
+(`WearState` in `crates/limina/src/window/input.rs`) are both in, so this is a path that skips both or a macOS unhide that did not take.
 Catch it with the poke-VM trace env on.
 
-### Needs repro: the menu-bar reveal drops while a macOS menu is still open
-Observed on the dogfood Mac (2026-08-22): a small downward move with a menu open releases the ask and the chrome retracts under the open
-menu. The ask is slaved to `NSMenu::menuBarVisible` (`InputState::menubar_observed`) and released by
-`reveal_step`; which of the two lets go first has not been measured.
-
-### Needs repro: `notch = extend` may not hide the band when the reveal triggers ungrabbed
-While macOS has the menu bar out, the strip overlay must not cover its band. Uncaptured, with the
-pointer at a panel's top, `InputState::menubar_observed` (run every tick) grants the reveal and
-`reconcile` stands the overlay down. A reveal with the pointer elsewhere (a Space switch, an
-app-initiated reveal) skips the grant by design. Which ungrabbed trigger leaves the band covering
-the bar is not established; catch one before changing anything.
+### Needs repro: the menu-bar reveal and macOS's own menu bar disagree
+Two sightings around the reveal, neither reproduced; catch each before changing anything.
+- **The reveal drops while a macOS menu is still open.** Observed on the dogfood Mac (2026-08-22):
+  a small downward move with a menu open releases the ask and the chrome retracts under the open
+  menu. The ask is slaved to `NSMenu::menuBarVisible` (`InputState::menubar_observed`) and released
+  by `reveal_step`; which of the two lets go first has not been measured.
+- **`notch = extend` may leave the band covering the bar when the reveal triggers ungrabbed.**
+  While macOS has the menu bar out, the strip overlay must not cover its band. Uncaptured, with the
+  pointer at a panel's top, `InputState::menubar_observed` (run every tick) grants the reveal and
+  `reconcile` stands the overlay down. A reveal with the pointer elsewhere (a Space switch, an
+  app-initiated reveal) skips the grant by design. Which ungrabbed trigger leaves the band over the
+  bar is not established.
 
 ### Needs repro: pointer not shown right after logout/login under synoik
 Intermittent on dogfood (sighted 2026-08-22) under synoik, not under mutter — a mutter "cannot reproduce" is a false
@@ -207,27 +211,32 @@ the supervisor and mirror it on the host keyboard (roadmap M8).
 
 ## Guest sessions
 
-### A guest VT switch leaves the host holding the wrong session's arrangement report
+### A fronted session with no helper leaves the host on the previous session's arrangement
 The virtio-gpu wire does not change across a seat switch (same scanouts, modes and resources, no
-event). Two faults follow when the incoming session runs no `limina-agent-session`:
-1. The report goes stale instead of absent. `layout_gate` holds while a session is inactive, which
-   is correct only if the incoming session claims the report. A compositor started with
-   `systemd-run --uid=… synoik --session` never reaches `graphical-session.target`, which is what
-   `limina-agent-session.service` is `WantedBy`.
-2. A present report outranks everything. `absfit::abs_position` consults the fitted lines only
-   `if !arrangement::has_report()`, so the contradiction/refit machinery is locked out;
-   `desktop_in_range` and `range_shares` also build the captured confinement and seam shares from
-   the stale report.
+event), so the host learns which session is on screen only from `limina-agent-session`. The helper
+(0.1.4) reports only while its uid holds seat0 (`ACTIVE_UID=` in logind's seat file,
+`guest/limina-agent-session/src/layout_gate.rs`), and re-sends after any seat change it sees
+between two polls, so neither a seatless session of the same user nor a session that fronts only
+briefly leaves a foreign report behind. What remains:
+- **A fronted session with no helper.** `limina-agent-session.service` is
+  `WantedBy=graphical-session.target`, which a compositor started with
+  `systemd-run --uid=… synoik --session` never reaches. Nothing then claims the report and the host keeps the last one it got.
+- **A held report outranks everything.** `absfit::mapping` returns the report whenever one is held
+  and consults the fitted lines only without one, and nothing demotes a report the cursor echo
+  keeps refuting; `desktop_in_range` and `range_shares` also build the captured confinement and
+  seam shares from it.
+- **The echo-mismatch warning does not name the cause**: it says where the cursor went, not that
+  the send was placed through a report (`window/echo.rs`).
 
-Measured 2026-08-24 on the dogfood guest: sends landed 2452 px off, the echo warned `we sent the pointer to
-slot 0 … the guest shows its cursor on [(1, …)] and none on slot 0`, and the captured pointer was
-clamped inside the other session's desktop — for exactly the windows where the other session owned
-the screen, clearing on every return (`layout_gate.poll` re-sends on inactive→active).
-Fixes, cheapest first: demote a report the echo keeps refuting (absfit's `CONTRADICTIONS` pattern;
-host-side, so it also covers the stock tier); name the tier behind each send (report, fit or
-identity) in the echo-mismatch warning; on the enhanced tier, have root `limina-agent` watch logind
-and tell the host when the seat's active session changes; reconsider the helper's `WantedBy`, or
-treat "no helper in the active session" as a reason to distrust the held report.
+Measured 2026-08-24 on the dogfood guest (helpers gated on the user's session state): sends landed 2452 px off, the echo warned `we sent the pointer to slot 0 …
+the guest shows its cursor on [(1, …)] and none on slot 0`, and the captured pointer was clamped
+inside the other session's desktop for exactly the windows where the other session owned the
+screen.
+
+Next: demote a report the echo keeps refuting, host-side (absfit's `CONTRADICTIONS` pattern), so
+it covers the stock tier and a helper-less session alike; name the tier behind each send (report,
+fit or identity) in the echo-mismatch warning; on the enhanced tier, have root `limina-agent`
+report logind's seat changes, which covers a session with no helper.
 
 ### A `SUBMIT3D` error storm across a guest DRM-master handoff
 Measured 2026-08-24 on the dogfood Mac with the C renderer: about 20 s after a guest `chvt` between two seat
@@ -262,21 +271,41 @@ Library Location…" picker that repoints without migrating; (3) per-VM placemen
 symlink-as-registration, showing dangling links greyed out as "volume not mounted", and the center's
 banner for an unmounted library in place of the empty-library state.
 
-### UEFI variables survive a torn write only by being reformatted
-The variable store is a file mapped into the guest (`docs/design/efi-vars.md`, mechanism B): every
-write lands in the file through the page cache, but there is no fault-tolerant write, so a host
-power loss mid-update can leave a store whose header the firmware rejects, and it then formats a
-new one. Today that costs one more shim fallback boot. It loses enrolled keys once Secure Boot
-keeps them there. Fix shape: ArmVirtQemu's CFI flash (`VirtNorFlashDxe` + a CFI device in
-libkrun) with the FTW working and spare blocks `VarStore.fdf.inc` already lays out; do it before
-Secure Boot ships.
+### UEFI variable writes are crash-safe except reclaim, and only as far as writeback is ordered
+The variable store is a file libkrun maps `MAP_SHARED` into the guest; Cardea keeps it in edk2's
+emulated-NV format (`third_party/cardea/crates/varstore`). An update is crash-safe in edk2's order
+(the old record marked in deleted transition, the new one written data first, then header, then
+`VAR_ADDED`, then the old one deleted), each store write fenced (`poke`), and a crash sweep cuts
+create, replace, append and delete at every write and checks what survives (`crash_sweep` in
+`crates/varstore/src/tests.rs`). Two gaps remain:
+- **Reclaim is not crash-safe**, nor is the full-store fallback that reuses the old record's space
+  (`reclaim_in_place` and the tail of `write` in `crates/varstore/src/lib.rs`; edk2's emulated-NV
+  reclaim is not either). Either runs when a write does not fit at the end of the store.
+- **The order holds in the page cache, not on disk.** The fences order the firmware's stores into
+  the mapping, which is all a worker crash can see. A host power loss sees what writeback reached
+  the file, page by page, in no promised order, so an update spanning pages can persist its later
+  step without its earlier one.
+
+The cost today is a shim fallback boot; once Secure Boot keeps enrolled keys there it is the keys.
+Settle both before Secure Boot ships.
+
+### A store Cardea cannot parse leaves the VM on RAM variables for good
+When the VMM's window holds a store that no longer parses, Cardea leaves it untouched and runs
+that boot on a RAM store (`open_window` in `third_party/cardea/firmware/src/vars.rs`: wiping it
+would turn one bad byte into a lost BootOrder). Nothing ever repairs it, so every later boot is
+RAM-only too, with a shim fallback boot each time (with a TPM, fallback's reset makes that a loop:
+`docs/design/efi-vars.md`), and the only trace is a line on the serial console. There is no lever
+to reset the store: the Configure sheet resets the TPM (`crates/limina/src/center/controller.rs`,
+`reset_tpm`) and nothing touches `efi.vars`. Owed: say so where the user will see it, and a reset
+beside the TPM's (move the file aside; the next boot formats a fresh store).
 
 ### Inventory the firmware features the guest probes and gets `NOT_SUPPORTED`
 Each declined feature is guest behaviour inherited by default instead of chosen. PSCI 1.0 +
 `SYSTEM_SUSPEND` are offered (libkrun `hvf/src/lib.rs`, gated by `LIMINA_PSCI_SYSTEM_SUSPEND`).
 Owed: the rest of PSCI 1.x (`SYSTEM_RESET2`, `CPU_FREEZE`, `CPU_SUSPEND` idle states, the full
-`PSCI_FEATURES` answer set), SMCCC/`ARCH_FEATURES`, PPTT/topology, and anything else a guest
-probes — decide offer or decline for each and record it.
+`PSCI_FEATURES` answer set), SMCCC/`ARCH_FEATURES`, and anything else a guest probes — decide
+offer or decline for each and record it. (The ACPI machine already carries a PPTT: one package of
+every vCPU, libkrun `devices/src/acpi.rs`, `build_pptt`.)
 
 ### Cardea preserves x18 with entry shims instead of never using it
 x18 is the AArch64 platform register: Linux keeps its shadow call stack there and checks that every
@@ -302,14 +331,20 @@ switch between the display and a terminal view of the serial line, as QEMU's mon
 
 ---
 
+## Storage
+
 ### A full host disk reaches the guest as an I/O error, and its file system goes read-only
-The virtio-blk worker answers a failed host `flush`/`sync` with an I/O error
-(`RequestError::FlushingToDisk`, libkrun `devices/src/virtio/block/worker.rs`), so ENOSPC on the
-host volume, which a large build on the same disk can cause, aborts the guest's btrfs transaction and
-forces it read-only until a reboot; writes since the last commit are lost. Seen on a dev guest:
-`FlushingToDisk(… "No space left on device")` in the worker log, `forced readonly` in the guest.
-Fix shape: pause the VM on ENOSPC and resume once space returns (QEMU's `werror=enospc` default),
-and say so in the window, rather than failing the request.
+The virtio-blk worker answers a failed host `flush`/`sync` with `RequestError::FlushingToDisk`
+(libkrun `devices/src/virtio/block/worker.rs`, the `VIRTIO_BLK_T_FLUSH` arm), and every request
+error reaches the guest as `VIRTIO_BLK_S_IOERR`; nothing in the block device or the worker treats
+ENOSPC differently or pauses the VM. So ENOSPC on the host volume, which a large build on the same
+disk can cause, aborts the guest's btrfs transaction and forces it read-only until a reboot;
+writes since the last commit are lost. Seen on a dev guest: `FlushingToDisk(… "No space left on
+device")` in the worker log, `forced readonly` in the guest. Fix shape: pause the VM on ENOSPC and
+resume once space returns (QEMU's `werror=enospc` default), and say so in the window, rather than
+failing the request.
+
+---
 
 ## Suspend/restore
 
@@ -321,11 +356,23 @@ large RAM dump can together pass 60 s, so the supervisor reports the suspend aba
 worker completes it. Fix: have the supervisor's bound start at the worker's quiesce verdict (or
 extend while the worker reports a save in progress) rather than at the request.
 
-### `limina ls` shows a parked VM as running
+### The supervisor abandons the suspend bracket while the worker may still be saving
+When the bracket times out the supervisor clears `SUSPEND` and carries on as if the VM kept
+running (`supervisor.rs`, after `SUSPEND_BRACKET_TIMEOUT`), but the worker may still be writing the
+snapshot (previous entry). The vCPU policy runs throughout: the bracket re-onlines every vCPU first
+(`restore_all_vcpus`), because the online set is not in the snapshot and an offline vCPU restores
+as online (the comment at the bracket, task #41), yet nothing stops `on_pressure` or the QGA tick
+from answering the next report with a shrink before the worker snapshots, or while it is still
+saving after the timeout. Next: freeze the vCPU policy from the bracket's start until the worker
+answers (saved, or resumed); an L1 test with a deliberately slow save that pins both halves.
+
+### `limina ls` and the control center show a parked VM as running
 A supervisor parked behind the play button after a window-menu suspend holds the run lock, so
 `limina ls` reads the VM as running, never suspended, although its `[suspended]` record is
-written and the runtime socket reports `parked`. Fix: let the listing consult the runtime socket's
-parked state (or the record) before the lock.
+written and the runtime socket reports `parked`. The control center derives its row the same way
+(`crates/limina/src/center/model.rs`, `snapshot`: `suspended` only when not running), so it shows
+the same running VM. Fix: one shared VM-state helper that consults the runtime socket's parked
+state (or the record) before the lock, used by both.
 
 ### Some device threads can still write guest RAM while a snapshot dumps it
 `save_snapshot` holds every device with a `DumpGate` (`VirtioDevice::dump_gate`) from the GPU
@@ -447,13 +494,12 @@ episode.
 Background for this section — why idle guests need a real-time band, what it costs, and what
 ships — is in `docs/design/vcpu-scheduling-band.md`.
 
-### What is left of the Game Mode clamp now that the worker is out of the app's tree
+### The Game Mode clamp: what launching the worker through launchd leaves open
 While a games-category app is fullscreen and frontmost (Moonlight is one: `LSSupportsGameMode=true`),
 `gamepolicyd` turns Game Mode on and clamps every process in an app's process tree to priority 4:
 timers ~100 ms late, CPU denied, CoreAudio callbacks stalled for up to a second
-(`spikes/game-mode-throttle/RESULTS.md`). The worker is no longer in that tree: a transient launchd
-job (`ProcessType=Interactive`) starts it and the supervisor hands it its fds over Mach
-(`crates/limina-launch`; `l1_worker_lineage` asserts the lineage). What remains:
+(`spikes/game-mode-throttle/RESULTS.md`). The worker is outside that tree (launchd starts it,
+`supervisor.rs` `launch_through_launchd`; `l1_worker_lineage`). Open:
 - **Confirm it on the dogfood Mac.** The suite cannot turn Game Mode on. The oracle is `ps -M -p
   <worker>` reading 31 (and `97R` for the banded vCPU) while `gamepolicyd` logs `Game mode status is
   now on`, with smooth guest video and audio beside a fullscreen Moonlight.
@@ -463,22 +509,17 @@ job (`ProcessType=Interactive`) starts it and the supervisor hands it its fds ov
   launcher job rather than Limina.app. The worker is signed as `eti.noronha.limina` with the app's
   Info.plist, so grants should land on the same identity; recheck audio capture from a
   Dock-launched app.
-- **Native Mach channels are not owed for reach.** The control line protocol and the input
-  datagrams are unnamed socketpairs carried across as fileports, so nothing else can reach them.
-  Their consumers sit inside libkrun (the virtio-input backends poll an fd, the shown-ack reader in
-  `virtio_gpu.rs` reads `LIMINA_SHOWN_ACK_FD`), so moving them to Mach messages means teaching
-  libkrun's event loop to wait on ports (`EVFILT_MACHPORT`); it would buy whole-message writes and
-  fewer fds, nothing more.
 - **Strict timers on the present and audio paths**: the `gpu latch` thread's `thread::sleep` to its
   35 ms deadline (`virtio_gpu.rs`, `LIMINA_FENCE_LATCH_MS`), and anything else there. Still worth it
   for the supervisor's side, which stays clamped.
+- **Not owed: Mach channels.** The control line and input datagrams are unnamed socketpairs carried
+  as fileports, unreachable by anything else; Mach would mean `EVFILT_MACHPORT` in libkrun's loop
+  for whole-message writes and fewer fds, nothing more.
 - **Detect and explain**: our own threads at priority 4 are a direct oracle. Tell the user, and
   name the game-side levers (the menu-bar toggle, which held across re-fullscreens;
-  `LSSupportsGameMode=false` in apps they build).
-
-When launchd cannot be used (no gui domain, `launchctl` refusing), the supervisor posix_spawns
-the worker as before and logs that Game Mode will clamp it. `LIMINA_WORKER_LAUNCH=spawn` forces
-that path.
+  `LSSupportsGameMode=false` in apps they build). This also covers the fallback: when launchd
+  cannot be used, or `LIMINA_WORKER_LAUNCH=spawn` asks, the worker is the supervisor's child again
+  and is clamped with it.
 
 ### Explain the parked P-clusters behind the band panic
 A host panic on 2026-09-21 (`watchdog timeout: no checkins from watchdogd in 94 seconds`, panicked task
@@ -492,12 +533,14 @@ core offline, so reproducing it needs the M4 Pro shape and a validated parking o
 any unprivileged process can panic macOS by banding enough threads and saturating them — but
 filing is the user's call.
 
-### Revisit the band arm cap, which costs about 20% of venus throughput
-`arm_cap()` is half the efficiency cluster, floored at 1 (1 on an M1 Max, 2 on an M4 Pro). On
-`gl-replay-venus` the shipped default scores 44.8–49.4 against 56.67–56.80 with the static
-all-banded arm, so the whole cost is band reach (`perf/2026-09-21-remeasure.md`). The cap stays for
-safety, by decision. A revisit must account for: the two band-sensitive instruments disagree in sign
-(banding all four vCPUs restores `gl-replay-venus` but costs ~12% on `vk-replay-venus-headless`);
+### Revisit the band arm cap, which costs about 12% of `gl-replay-venus`
+`arm_cap()` is half the efficiency cluster, floored at 1 (1 on an M1 Max, 2 on an M4 Pro). Every
+vCPU runs in latency-QoS tier 0 by default (`88b29e8b`), and with that the shipped default scores
+50.0 on `gl-replay-venus` against 56.6 (`perf/2026-10-16-venus-regression.md`, which attributes
+the gap to the cap): the static all-banded arm restored 56.2–56.9 in `perf/2026-09-21-remeasure.md`
+and is not re-run: it is the configuration that panicked a host. The cap stays for safety, by decision. A revisit must account for: the two
+band-sensitive instruments disagree in sign (banding all four vCPUs restores `gl-replay-venus` but
+cost ~12% on `vk-replay-venus-headless`, `perf/2026-09-21-remeasure.md`);
 a replacement rule must stay bounded by what survives an idle machine (`hw.activecpu` does not — it
 read 10 of 10 on an idle M1 Max while the panicking M4 Pro had 10 of 14 cores offline); and the M1
 Max is the worst case for the current rule, so measure on an M4 Pro before generalising.
@@ -534,10 +577,12 @@ What is ours to try, in order:
   frequency. That confirms or kills the E-core/DVFS reading.
 - **Halt polling is not available**: HVF parks WFI inside `hv_vcpu_run`, so the thread never
   gets the chance to stay hot ([band design](design/vcpu-scheduling-band.md)).
-- **Thread-level levers not yet measured for this effect:** the vCPU threads' QoS class, an
-  `os_workgroup` joined by the vCPU threads (CLPC's input for interval workloads), and the RT band
-  itself. A mostly idle RT thread runs on E, so the band may worsen this on vCPU 0 while it fixes
-  timer lateness.
+- **Thread policy does not move it.** Latency-QoS tier 0 and the band leave it as it is: a 6%-duty
+  chunk takes 500 ns in every arm against 84-125 ns at 67% duty, and a futex wake after a 5 ms gap
+  costs 19-27 µs in every arm (`spikes/guest-vcpu-qos/RESULTS.md`). On the host, only an
+  `os_workgroup` whose thread brackets each period moves a moderately busy thread to P, and not at
+  2% duty (`spikes/launch-path-qos/RESULTS.md`); a vCPU thread cannot bracket the guest's periods,
+  and whether a joined, un-bracketed thread is placed on P is unmeasured.
 - A guest `idle=poll` A/B would confirm the utilisation theory, but not with as many vCPUs as host
   cores.
 
@@ -545,10 +590,13 @@ Knock-ons: the grow rule reads worker CPU time (`HostCpu` in `crates/limina/src/
 An E-placed vCPU burns more host time per unit of work, which biases that rule. It may also be part
 of *Host-CPU cost of a busy VM is unattributed* below.
 
-### Measure efficiency beyond idle, and against Parallels/Vz
+### Measure power beyond idle, and anything against Parallels/Vz
 Known: an idle guest costs ~13 mW of package power over an empty host, a `vkcube` guest ~0.9 W
-(`spikes/macos-timer-wakeup/results-battery.md`). Disk, network, builds, video calls and a desktop in
-use have never been measured in watts, and "replace Parallels" is a perf/W claim with no evidence.
+(`spikes/macos-timer-wakeup/results-battery.md`); GPU compute throughput over the Metal transport
+is measured against the same work native (`perf/2026-10-18-compute.md`, speed only). Disk,
+network, builds, video calls, compute and a desktop in use have never been measured in watts,
+nothing has been measured against Parallels or Virtualization.framework, and "replace Parallels" is
+a perf/W claim with no evidence.
 Needed: a work-unit counter per workload (frames, IOPS, packets, wall-clock for a fixed build —
 watts alone rank a slow VM first); package power without a human (`powermetrics` needs root, a use
 for the deferred privileged helper, `docs/design/privileged-helper.md`); the same workloads under
@@ -606,14 +654,16 @@ so first rule libkrun out:
   (`irq_set_irqchip_state`); trace the L1 KVM's `kvm_timer_*` and `vgic_*` events at a hang to see
   whether the L2 ever reads `ICC_IAR1_EL1`, and what the LR holds when it does.
 
-### The device tree names the wrong hypervisor timer interrupt
-libkrun's timer node (`devices/src/fdt/aarch64.rs`, `create_timer_node`) lists PPI 12 (INTID 28)
-in the hypervisor-timer slot; HVF raises the EL2 physical timer on INTID 26
+### Both machines name the wrong hypervisor timer interrupt
+libkrun lists PPI 12 (INTID 28) as the EL2 timer in the device tree's timer node
+(`devices/src/fdt/aarch64.rs`, `create_timer_node`) and in the ACPI GTDT, the default machine
+(`devices/src/acpi.rs`, `build_gtdt`, which `gtdt_names_the_device_tree_timer_interrupts` pins to
+the device tree's values). HVF raises the EL2 physical timer on INTID 26
 (`hv_gic_get_intid(HV_GIC_INT_EL2_PHYSICAL_TIMER)`, measured in
 `spikes/nested-virt-probe/RESULTS.md`, *Timer interrupts at EL2*). Nothing reads that entry today:
-Linux runs nVHE and the firmware uses the EL1 physical timer at EL2. A VHE guest kernel, or
-firmware moved to `CNTHP`, would get no timer. Take the INTID from `hv_gic_get_intid` when EL2 is
-on.
+Linux runs nVHE, and Cardea uses the EL1 virtual timer at EL1 and polls at EL2
+(`third_party/cardea/firmware/src/arch.rs`, `idle`). A VHE guest kernel would get no timer. Fix
+both tables from `hv_gic_get_intid` when EL2 is on, and the test with them.
 
 ---
 
@@ -622,29 +672,73 @@ on.
 ### The "no guest-reachable aborts" audit, restated for virglrs
 Policy by layer: asserts guard internal invariants only; host drivers (KK, zink) tolerate bad input
 by clamping or skipping, because `vkCmd*` cannot return errors; the renderer is the trust boundary —
-validate, then poison the context; libkrun's Rust decoders return errors instead of `unwrap`. The
-surface was counted against the C renderer and needs recounting now that virglrs is the boundary:
-virglrs `src/venus` and `src/vrend` (`unwrap`/`expect`/`panic!`/`assert!` on guest-reachable paths,
-tests excluded — a raw grep over all of virglrs `src` gives ~1250 hits, so a real per-path count is
-owed); KK `vulkan/` (178 asserts at the last count); `vk_meta*` compiled into KK (71); libkrun
-virtio-gpu (89). The GL path needs its own answer: a guest's GL stream reaches zink through virglrs's
-vrend, so hardening the Vulkan decoder does nothing for it. Decide what vrend validates before zink
-sees a command.
+validate, then poison the context; libkrun's Rust decoders return errors instead of `unwrap`.
+
+Where virglrs stands: its non-test `src/venus` and `src/vrend` code holds about 580
+`unwrap`/`expect`/`panic!`/`assert!` sites (about 690 with `assert_eq!`, `assert_ne!` and
+`unreachable!`; a grep that skips comment lines and stops each file at its `#[cfg(test)]` module).
+Most are `expect`s on invariants — formatting into a `String`, a value the decoder already bounded,
+a lock — not on guest input. The guest-facing decoders carry their own hardening: many guest-input
+fixes, Kani proofs over the venus command stream, ring and guest-memory access
+(`src/venus/cs.rs`, `src/venus/ring.rs`, `src/guest_mem.rs`, `src/vrend/transfer.rs`), and fuzz
+targets for `venus_command`, `tgsi_translate`, `h264_annexb`, `h265_picture`, `av1_frame` and
+`sync_blob` (`third_party/virglrs/fuzz`). No fuzz target covers the classic vrend command decoder
+(`src/vrend/decode.rs`), which is how a guest's GL stream reaches zink. The guest-reachable aborts
+that survive are in libkrun's virtio-gpu device (next entry).
+
+Next: a vrend decode fuzz target. Recount KK's asserts (`vulkan/` and the `vk_meta*` it compiles in)
+only when a KK hardening pass is scheduled.
+
+### Guest-controlled input aborts libkrun's virtio-gpu device
+Two guest-reachable panics, both taking the device with them:
+- **Descriptor chains.** The GPU worker builds each control-queue chain's reader and writer with
+  `Reader::new(..).unwrap()` / `Writer::new(..).unwrap()`, and each cursor-queue chain's reader the
+  same way (libkrun `devices/src/virtio/gpu/worker.rs`). Popping a chain checks only the descriptor
+  table, so a descriptor whose buffer lies outside guest RAM fails `Reader::new`
+  (`FindMemoryRegion`, `descriptor_utils.rs`), and the panic ends the GPU worker thread: every
+  context, scanout and fence of the VM stops.
+- **Blob flags.** `resource_create_blob` (`virtio_gpu.rs`) panics with `GUEST_HANDLE unimplemented`
+  when the guest's `blob_flags` carries `VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE`; the flags arrive
+  from the guest unmasked.
+
+Reaching either needs a crafted guest kernel, not an application. Fix, RED-first: log the bad chain
+and complete it with an error (or skip it) instead of unwrapping; answer the flag with
+`ErrInvalidParameter`.
 
 ### A virglrs panic ends 3D for the rest of the VM's life
-A panic inside virglrs is caught at the rutabaga boundary: every call into the renderer goes
-through `Guarded` (libkrun `rutabaga_gfx/src/virgl_renderer.rs`), which catches the unwind, marks
-the renderer dead, refuses every later call with `EIO`, and leaks the renderer instead of dropping
-it. The containment is the whole renderer, not the context that panicked: the tables, the GL
-context and the venus decoder are shared, so nothing establishes that one context's damage stays
-in it. After a panic the guest keeps its disks, network and console, but loses 3D, and the fences
-pending in the renderer at that moment never retire (new ones are retired as lost by
-`virtio_gpu.rs`). Not caught: panics on virglrs's own threads (venus rings, decode, fence
-waiters), and panics in Rust callbacks entered from C (VideoToolbox, GL debug output), which abort.
-Next: decide whether a dead renderer should retire its pending fences so the guest's compositor
-fails cleanly instead of waiting, and whether per-context containment is worth a virglrs audit
-of what a context's handlers can leave half-updated. `spikes/piglit-virgl/` is the regression
-check for guest-reachable aborts on the GL path.
+A panic inside virglrs on the render thread is caught at the rutabaga boundary: every call into
+the renderer goes through `Guarded::contain` (libkrun `rutabaga_gfx/src/virgl_renderer.rs`), a
+`catch_unwind` that marks the renderer dead, refuses every later call with `EIO`, and leaks the
+renderer instead of dropping it. That works because the worker unwinds: no profile in the root
+`Cargo.toml` sets `panic`, and virglrs's own `panic = "abort"` (its `Cargo.toml`) applies only
+when virglrs is built as its own workspace, since cargo ignores a dependency's profiles. So the
+comments that say virglrs's panics abort are wrong for the shipped worker: in `third_party/virglrs`,
+`CLAUDE.md` ("Panics abort; they never unwind into C"), `src/venus/cs.rs` (two, under
+`panic = "abort"`), `src/venus/ring_thread.rs` (the ring join's `expect`) and
+`src/vrend/video/mod.rs` (the decode thread's join); in limina, `scripts/run-suite.sh` and
+`scripts/tests/run-suite-verdict.sh` (the worker "builds panic = abort").
+
+The containment is the whole renderer, not the context that panicked: the tables, the GL context
+and the venus decoder are shared, so nothing establishes that one context's damage stays in it.
+After a panic the guest keeps its disks, network and console, but loses 3D, and the fences pending
+in the renderer at that moment never retire (new ones are retired as lost by `virtio_gpu.rs`).
+Not contained: a panic on a virglrs-owned thread (venus rings, decode, fence waiters) only ends
+that thread and is logged by `limina-paniclog`, which is the worker's only panic hook; the
+renderer is not marked dead and 3D hangs. A panic in a Rust callback entered from C (VideoToolbox,
+GL debug output) aborts the worker, since an unwind cannot leave an `extern "C"` function.
+
+Some host-state `expect`s and `panic!`s in vrend turn a degraded GL stack into renderer death:
+making a sub-context's or ctx0's GL context current (`vrend/context.rs` `make_current`;
+`vrend/vrend.rs` `switch_ctx0` and three loops over every context's GL contexts), the blitter's
+context (`vrend/context/blit.rs`), and a refused adoption of minted storage, whose message carries
+the guest's dimensions (`vrend/resource.rs`). Prefer a fault that poisons the context.
+
+Next: one panic policy for the worker, written down and matched by the comments; mark the renderer
+dead when a virglrs-owned thread panics, as `Guarded` does for the render thread; retire a dead
+renderer's pending fences so the guest's compositor fails cleanly instead of waiting; and decide
+whether per-context containment is worth a virglrs audit of what a context's handlers can leave
+half-updated. `spikes/piglit-virgl/` is the regression check for guest-reachable aborts on the GL
+path.
 
 ### Nothing stops a guest from submitting seconds ahead of the host's decode
 A classic (vrend) client that submits faster than the virtio-gpu worker decodes keeps the control
@@ -692,11 +786,15 @@ browser or no multisampled blit on the wire; needs `LIMINA_ARM_EXPECT_MSAA=0` un
 virglrs's vrend keeps the seam that produced the C-era races: a fence waiter thread makes its own
 context current in ctx0's share group and waits on syncs (`vrend/waiter.rs`), entering zink's
 screen/batch state from a thread zink does not know about; virgl-over-zink is undertested upstream.
-The zink race fixes are on `limina-kk` (`a0d96c18f02`, `c398247db94`). One race is left alone
+The zink race fix is on `limina-kk` ("zink: fix the data races on the cross-thread batch/fence
+state", `6aa1f4a2105`); its companion "kk: make the limina debug counters atomic" is only on side
+branches (`parked/fence-sync`, `wip/keep-zs`), not on `limina-kk`. One race is left alone
 deliberately because locking it is a hot-path perf decision: `zink_batch_reference_resource_move()`
 and its `_unsync()` twin mutate the same batch lists from different threads by design. No TSan pass
-has covered the Rust renderer. Recipe: build host mesa with `-Db_sanitize=thread` into its own prefix
-and point the worker at it with `MESA_PREFIX`; link the TSan runtime into the worker with
+has covered the Rust renderer. virglrs's loom models cover the venus ring's park and wake
+(`src/venus/ring_thread.rs`) and fence retirement (`src/fence.rs`), not vrend's waiter. Recipe:
+build host mesa with `-Db_sanitize=thread` into its own prefix and point the worker at it with
+`MESA_PREFIX`; link the TSan runtime into the worker with
 `RUSTFLAGS="-C link-arg=<tsan dylib> -C link-arg=-Wl,-rpath,<dir>"` (a `DYLD_INSERT_LIBRARIES`
 preload is stripped across the worker spawn, and TSan then aborts with "interceptors are not
 working"); boot with `TSAN_OPTIONS="halt_on_error=0 log_path=…"`; run a rendering workload (boot alone
@@ -715,7 +813,8 @@ today (the venus trigger is fixed), but it is an upstream GTK bug worth reportin
 ## GPU correctness
 
 ### Every missing venus reply reaches the guest app as `VK_ERROR_OUT_OF_HOST_MEMORY`
-mesa-guest 0005 makes a submit on a FATAL ring return `VK_ERROR_DEVICE_LOST` from the ring layer, but
+The `limina-guest` commit "venus: surface ring loss as VK_ERROR_DEVICE_LOST instead of abort()"
+makes a submit on a FATAL ring return `VK_ERROR_DEVICE_LOST` from the ring layer, but
 the generated `vn_call_*` (`vn_protocol_driver_*.h`: `dec ? decode : VK_ERROR_OUT_OF_HOST_MEMORY`)
 still turns any absent reply into OOM. Reply-pool allocation failure, ring FATAL at submit, ring FATAL
 while waiting and a real host refusal all reach the app as one code — the mechanical root of "OOM out
@@ -723,59 +822,19 @@ of venus is never memory". Fix, guest-side and upstreamable (`limina-guest`): ca
 result into `vn_ring_submit_command` and have `vn_call_*` return it when the reply is absent. Cheap,
 and it makes the next dogfood OOM report classify itself.
 
-### piglit's buffer and texture-transfer groups on classic virgl: what upstream vrend shares
-The same 1871-test selection (piglit `quick`, buffer/PBO/texture-transfer groups) ran on two
-stacks, measured 2026-10-05:
-- **Upstream rig:** stock QEMU 10.2 + virglrenderer 1.3.0 on an Intel host, guest Mesa `main`
-  b39d173ca93, surfaceless (125 tests never reached the driver there). Run in
-  `spikes/upstream-repro/virgl-pbo-upload-wait/`.
-- **limina:** stock and enhanced F44 guests on virglrs vrend over zink-on-KK, gbm. Run in
-  `spikes/piglit-virgl/`.
-
-**Fail on both stacks** (guest Mesa or vrend behaviour, so upstream candidates):
-- `copyteximage 3d`.
-- `arb_get_texture_sub_image-get`/`-getcompressed` on compressed 2D. With Fedora's Mesa,
-  `-getcompressed` segfaults in the guest.
-- `getteximage-targets 2d_array s3tc`: zeros from layer 6 on.
-- `fbo-readpixels-depth-formats`: float depth reads 0.999985 for 1.0, a 24→32-bit expansion off by
-  0x80.
-- `arb_shader_image_load_store@early-z`: half the occlusion count.
-- `arb_shader_image_load_store@invalid`: out-of-bounds and invalid-format image atomics return
-  garbage instead of zero.
-- `ext_transform_feedback2@draw-auto offset`.
-- `arb_texture_buffer_object@max-size` (128 MiB, flaky on the rig).
-
-**Fail only on the rig** (pass on limina):
-- `arb_transform_feedback_overflow_query-basic` and `arb_query_buffer_object@qbo`.
-- `getteximage-targets cube_array s3tc`.
-- `teximage-colors` RGB 3_3_2, off by one LSB.
-- `tessellation triangle_fan flat_first`.
-
-### piglit's limina-only failures are now mostly vrend's GLES flavour
-Same selection, rerun 2026-10-06 with KK `43152beb621` (`spikes/piglit-virgl/`). The stock and
-enhanced guests still fail the same tests, about 100 on limina's host that pass on the upstream rig.
-Running each one in the enhanced guest under zink-on-venus as well
-(`MESA_LOADER_DRIVER_OVERRIDE=zink`, which reaches KK without vrend) splits them:
-- **Pass under zink-on-venus, so they are in virglrs vrend.** Its GLES 3.1 flavour has no geometry
-  shaders or tf3, and lacks image caps. That accounts for the image load/store, SSBO and most
-  transform-feedback failures, plus BPTC float uploads, `getteximage-formats`, `pos-array` and DSA
-  `transformfeedback-buffer*`.
-  - Texture buffers reach it since KK emulates R32G32B32 texel buffers (KK `c76a16a26f8`), which
-    gives host zink `OES_texture_buffer`; 22 texture-buffer tests pass under vrend. Still failing
-    there: the legacy ALPHA, LUMINANCE, LUMINANCE_ALPHA and INTENSITY formats in
-    `arb_texture_buffer_object@formats (fs|vs, arb)`.
-  - All 27 timeouts (300 s) are indexed draws under transform feedback, which GLES refuses. virglrs
-    de-indexes them since `6c6a60b` (pinned); the selection has not been rerun on it.
-  - virglrs's desktop flavour passes 69 more of these and regresses 26 uploads; which flavour ships
-    is undecided.
-- **Fail under zink-on-venus too, so they are in KK or zink:**
-  - `arb_draw_indirect-draw-elements-prim-restart-ugly` (passes on virglrs's desktop flavour).
-  - `arb_shader_image_load_store@host-mem-barrier`.
-  - `ext_transform_feedback2@counting with pause` and the five geometry-shader xfb tests: see the
-    KosmicKrisp entries below.
-- **Fence waits that give up.** "waiting got error - 16, slow gpu or hang?" after 15–40 s turns a
-  pass into a fail on either guest. `vbo-subdata-*` fail this way in some full runs and pass 3/3 run
-  alone (`spikes/piglit-virgl/rep.sh`), so treat a lone difference with that line as a host stall.
+### piglit's limina-only failures on classic virgl: rerun, pick a flavour, then the KK remainder
+About 100 tests of piglit's buffer, PBO and texture-transfer selection fail on limina and pass on
+the upstream rig; most are in virglrs vrend's GLES 3.1 flavour, the rest in KK or zink. The split,
+test by test, is in `spikes/piglit-virgl/README.md` (*Against the upstream rig*). Owed, in order:
+- **Rerun the 27 timeouts on the current pins.** All are indexed draws under transform feedback,
+  which GLES refuses; virglrs de-indexes them since `6c6a60b` ("vrend: draw indexed under
+  transform feedback as arrays on GLES 3.1", pinned), and the selection has not run on it.
+- **Decide which flavour ships.** The desktop flavour passes 69 more of the limina-only failures
+  and regresses 26 uploads.
+- **The residual KK/zink list**, which fails under zink-on-venus too:
+  `arb_draw_indirect-draw-elements-prim-restart-ugly` (passes on the desktop flavour),
+  `arb_shader_image_load_store@host-mem-barrier`, `ext_transform_feedback2@counting with pause`
+  and the five geometry-shader xfb tests (KosmicKrisp entries below).
 
 ### vrend guests on the GLES flavour compute every double as zero (low priority)
 With geometry shaders on in KK, the GLES host flavour lifts vrend guests to GLSL 430, which exposes
@@ -799,7 +858,8 @@ A guest that does `gbm_bo_map` → write → unmap on a LINEAR `Argb8888` dmabuf
 venus read the buffer's previous contents: the write reaches the host as a control-queue transfer on
 libkrun's gpu worker thread, venus reads on its own ring thread, and nothing orders the two. The fix
 takes two halves: guest mesa virgl flushes and waits for the bo to idle on unmap of a write map of a
-`PIPE_BIND_SHARED` resource (mesa-guest 0008), and the host finishes the upload before the virtio-gpu
+`PIPE_BIND_SHARED` resource ("virgl: settle a CPU write into a shared resource before unmap
+returns" on `limina-guest`), and the host finishes the upload before the virtio-gpu
 fence signals. Under the C renderer the guest half alone still failed the first write after boot in 5
 of 6 boots; both together failed 0 of 7 (measured 2026-08-14). Owed:
 - **Re-run the reproducer under virglrs.** The host half was a C-vrend change; virglrs's fence path
@@ -830,11 +890,13 @@ against a known-failures baseline.
 plane fence for any primary plane whose bo is not a guest blob, then fences only dumb or imported
 objects. A GNOME desktop scans out through vrend (non-blob), so its flushes carry no fence, no
 `GuestFlushHold` forms, and the compositor may render into the buffer while it is on glass. The
-supervisor covers that with a Metal-blit copy of every unheld frame (`docs/graphics.md` §4): correct,
-but ~1.2 ms of added latency per frame, 4.6–6.1 ms worst case under a 24–33 fps WebGL load (measured
-2026-09-12). limina's DKMS module fences every primary-plane flush when the host offers the limina
-extension (`guest/virtio-gpu-limina/0001-hook-the-limina-extension.patch`), which the host does only
-with `--gpu-metal`, so this is closed on the transport and open everywhere else. Remaining: fence
+supervisor covers that with a Metal-blit copy of every unheld frame (`docs/graphics.md` §4,
+`window/copy.rs`), and that copy is what keeps the stock tier correct: the window server composites
+the copy, never the buffer the guest is drawing into. It adds ~1.2 ms of latency per frame,
+4.6–6.1 ms worst case under a 24–33 fps WebGL load (measured 2026-09-12). limina's DKMS module
+fences every primary-plane flush when the host offers the limina extension
+(`guest/virtio-gpu-limina/0001-hook-the-limina-extension.patch`), which the host does only with
+`--gpu-metal`, so this is closed on the transport and open everywhere else. Remaining: fence
 when the host holds flushes without the extension (a capability of its own in `LIMINA_INFO`, or the
 module keyed on something the host offers in venus mode too), and confirm on a vrend desktop that
 the flush parks rather than taking the blocking `sync_iosurface` path. Check with
@@ -882,36 +944,9 @@ hovered. Outside the overview both are fine. Not measured. Start from the worker
 stops drawing. The hover dependence points at the compositor choosing what to repaint until a log says
 otherwise.
 
-### Direct-KMS strictly double-buffered clients run at ~30 fps
-On the Metal transport this is probably closed and needs a re-measure: there the module completes
-a flip at release when a vblank tick passed during the commit, and transport scanouts go up as
-copies released at the blit (~1 ms). The aquarium under mutter went from 39 to 58.7 presented fps on
-a 60 Hz screen (2026-10-14, `docs/design/host-vblank.md`). Off the transport the analysis below
-still stands. kmscube `-A` ran at 31 fps on a 60 Hz host whatever `LIMINA_FENCE_LATCH_MS` was (8 and 35 ms both
-gave 31), measured 2026-06-23, before the virglrs present path — re-measure before acting. A client that blocks
-on flip-complete misses every other vsync because the fence-accurate present waits twice in sequence
-(GPU render complete, then the CoreAnimation latch) and the round trip exceeds one vsync. Wayland
-desktops and fullscreen apps reach 60 because mutter triple-buffers; only bare direct-KMS
-double-buffered clients (kmscube, SDL-KMS demos) are affected. If they ever matter: fire the
-atomic-KMS fake vblank at render-complete or on a vsync-cadence timer without reintroducing tearing,
-or shave the present round trip below one vsync. Run kmscube over ssh as `sleep N | kmscube …` (it
-polls stdin and bails on EOF).
-
 ---
 
 ## GPU perf
-
-### Single virtio-gpu ioctls stall for 100 ms to seconds under a canvas workload
-Firefox's canvas thread on a stock-session limina guest (M1 host, virgl over zink-on-KK, Basemark
-Canvas Test, guest Mesa `26.2.3-3.limina`) logged 27 ioctls over 100 ms in 8 traced 15 s runs —
-about 3 a run, typically 100–475 ms — spread over `RESOURCE_CREATE`, `GEM_CLOSE`, `EXECBUFFER`,
-`MAP` and `WAIT`, on the PBO and the CPU-pointer arm alike (measured 2026-10-05). Two runs opened
-with multi-second ones in their first 100 ms (`VIRTGPU_MAP` 7.3 s, `RESOURCE_CREATE` 3.4 s, both
-under `BufferData`). Nothing guest-side distinguishes the stalled calls from their thousands of fast
-siblings, so the cause is likely host-side: the virtio-gpu control queue behind another context, a
-virglrs resource create or destroy that blocks, or the worker's own scheduling. Next: catch one with
-`LIMINA_GPU_TRACE` and the worker log at the matching timestamp; the
-`vkWaitRingSeqnoMESA` entry below is one candidate for the queue head.
 
 ### vrend's cold shader and pipeline compiles run on the virtio-gpu worker thread
 A vrend context drawing something new freezes the whole virtio-gpu device for as long as the
@@ -925,23 +960,30 @@ only with a single context), so `tc_flush` syncs the threaded context and runs t
 inline, including `zink_create_gfx_pipeline` compiling on KosmicKrisp, which has no
 graphics-pipeline-library path to defer them. The `SUBMIT_3D` outliers are the front of the same
 chain: TGSI→GLSL translation and program linking in `select_linked_program`. The cost varies from
-boot to boot with what is already compiled. The canvas-ioctl stalls above are probably the same
-class.
+boot to boot with what is already compiled.
+
+Single guest ioctls stalling for 100 ms to seconds are probably the same class. Firefox's canvas
+thread on a stock-session guest (M1 host, Basemark Canvas Test, guest Mesa `26.2.3-3.limina`)
+logged 27 ioctls over 100 ms in 8 traced 15 s runs — about 3 a run, typically 100–475 ms — spread
+over `RESOURCE_CREATE`, `GEM_CLOSE`, `EXECBUFFER`, `MAP` and `WAIT`, on the PBO and the CPU-pointer
+arm alike (measured 2026-10-05). Two runs opened with multi-second ones in their first 100 ms
+(`VIRTGPU_MAP` 7.3 s, `RESOURCE_CREATE` 3.4 s, both under `BufferData`). Nothing guest-side
+distinguishes the stalled calls from their thousands of fast siblings. Confirm by catching one with
+`LIMINA_GPU_TRACE` and the worker log at the matching timestamp; the other candidate for the queue
+head is the `vkWaitRingSeqnoMESA` entry above.
 
 Fix shape (decided): move vrend off the virtio-gpu worker thread, so a compile holds only its own
 context's fences and never the queue. Two smaller levers were set aside: an async fence flush in
 the host Mesa fork (vrend's sync thread waits on those fences from another, shared context, which
 is the case Mesa's single-context guard exists for), and persistent host pipeline caches (they
-shorten the first stall per host but leave the structure).
-
-Parked, and the fix may pivot. Shortening levers were tried and withdrawn, none carried: SPIR-V
-programs (`docs/design/vrend-spirv.md`), skipping the host's second varying optimisation, the
-threaded context handing a batch to zink's driver thread at the first draw after a new shader, and
-KosmicKrisp compiling a pipeline's two stages on two threads. Together they took Loupe's About
-dialog from about 185 ms to 156 ms, Mesa-cold and Metal-warm, but the SPIR-V path empties the
-per-VM shader cache. The Mesa halves are in tag `limina-kk-pre-stall-revert-2026-10-20`, the
-virglrs half in `main-pre-stall-revert-2026-10-20`, and the wake probe's per-phase drain split in
-libkrun tag `limina-pre-stall-revert-2026-10-20`.
+shorten the first stall per host but leave the structure). Shortening the compiles is not enough
+either: SPIR-V programs (`docs/design/vrend-spirv.md`), skipping the host's second varying
+optimisation, handing a batch to zink's driver thread at the first draw after a new shader, and
+KosmicKrisp compiling a pipeline's two stages on two threads together took Loupe's About dialog
+only from about 185 ms to 156 ms, Mesa-cold and Metal-warm, and the SPIR-V path empties the per-VM
+shader cache. They are kept in tags: `limina-kk-pre-stall-revert-2026-10-20` (Mesa),
+`main-pre-stall-revert-2026-10-20` (virglrs) and `limina-pre-stall-revert-2026-10-20` (libkrun,
+the wake probe's per-phase drain split).
 
 ### Metal's own shader cache is unmanaged and unexplained
 Below Mesa's disk cache, which limina now places and caps per VM (`--gpu-shader-cache`), macOS keeps
@@ -986,10 +1028,6 @@ If that still holds under **MTL4**, which this tree encodes with, KK could imple
 only by caching PSO variants keyed on vertex input — zink's current job moved one layer down, for no
 gain. The answer decides whether the item is worth anything.
 
-### Only if GPU-bound workloads reappear: KK's per-draw root re-fetch
-A candidate GPU-side cost: KK re-fetching the root on every draw. Unverified on the current tree and
-worth nothing unless a current perf instrument is GPU-bound — check both before spending time on it.
-
 ---
 
 ## KosmicKrisp
@@ -1002,7 +1040,8 @@ through a NULL `ComputeContext+0x918` pass-state pointer that only `beginCompute
 Established: the context memory was zeroed wholesale; the KK encoder was its own live incarnation
 (encoder guard: 250M checks, 0 bad), so a stale KK encoder pointer is ruled out, as are a pool
 segment cap or allocation failure, address space, host RAM, the shared-event log flood and venus
-context count. Armed: the context hook in `limina-kk` `bb3994fc6db` (ivars + pass-state canary at
+context count. Armed: the context hook on `limina-kk` ("kk: watch the AGX context behind each
+compute encoder, not just the encoder", `e6a5ba3cef9`; ivars + pass-state canary at
 birth and every op; `[LIMINA-CTX]` report; the op is skipped instead of faulting;
 `LIMINA_KK_CTX_CANARY`) plus the encoder guard (`LIMINA_KK_ENC_GUARD`). Because the guard prevents
 the crash, silence is not evidence — the oracle is
@@ -1036,8 +1075,10 @@ four-sample image has been seen in a `COMBINED_IMAGE_SAMPLER`; Metal's 2D and 2D
 differ, so such a read misaddresses off a valid base and no descriptor-byte check can see it. Vulkan
 forbids the read, so this is a missing debug assertion. It belongs at the draw (set layouts do not
 know shader dimensionality): the bound pipeline's declared image dimension against the bound view's
-`sample_count_sa`. `LIMINA_KK_ADDR_CHECK` already reports the view half as `[LIMINA-MSBIND]`
-(`kk_cmd_draw.c`). Not the WebGL-MSAA cause (`[LIMINA-MSBIND]` fired on 0 of 24 draws at the loss).
+`sample_count_sa`. A debug check for the view half (`LIMINA_KK_ADDR_CHECK`, reporting
+`[LIMINA-MSBIND]` from `kk_cmd_draw.c`) exists only on side branches (`parked/fence-sync`,
+`wip/keep-zs`), not on `limina-kk`; on those it was not the WebGL-MSAA cause (0 of 24 draws at the
+loss).
 
 ### The source of a NULL allocation added to the residency set is unknown
 `kk_device_add_{heap,buffer,texture}_to_residency_set` used to pass NULL to
@@ -1073,59 +1114,41 @@ zink no longer hands KK list restart. The venus tier still reaches the skip or t
 the pre-graphics/batched branch `limina-kk-pregfx` (`perf/listrestart-2026-10-07/`). A GPU hang is
 host-wide: reproduce only on an otherwise idle host.
 
-### piglit's `ext_timer_query-time-elapsed` hangs the GPU (root cause OPEN; copy-dispatch mitigation insufficient)
-On the vrend tier (vrend → zink → KK), the piglit binary `ext_timer_query@time-elapsed` hangs a Metal
-command buffer — `kIOGPUCommandBufferCallbackErrorHang` (MTL4CommandQueueErrorDomain Code=1), zink then
-reports the device lost. After two GPU restarts the kernel logs `Deny submissions/ignore app[limina-vmm]`
-and drops that worker's later GPU work, so everything after it in the VM stalls; a new worker gets a
-working GPU. `arb_timer_query@query gl_timestamp`, run first, passes before the ban. Any guest GL app
-timing frames with `GL_TIME_ELAPSED` can trip it. A GPU hang is host-wide: reproduce only on an
-otherwise idle host. Vehicle: `spikes/piglit-virgl/ab.sh <disk> <kk icd> ext_timer_query@time-elapsed <out>`;
-the host-GPU oracle is `log show --predicate 'eventMessage CONTAINS "GPURestart"'` plus the worker log's
-`kIOGPUCommandBufferCallbackErrorHang` + `[LIMINA-DEVICE-LOST]` ring.
+### A long guest shader trips macOS's GPU watchdog (fixed on unpushed branches; pins not bumped)
+piglit's `ext_timer_query@time-elapsed` doubles the loop count of a slow fragment shader until one
+draw takes 0.1 s. macOS's GPU watchdog stops fragment work like that after tens of milliseconds
+(`kIOGPUCommandBufferCallbackErrorHang`, one host GPU restart per hang). The same shader hangs bare
+Metal with no VM, and the timer query is innocent (`spikes/timer-query-hang/RESULTS.md`). Any guest
+shader in that class, such as a heavy WebGL page, reaches it the same way, on either tier. On the
+pinned stack, KK then marks the device lost, every GL context in the VM fails, the control queue
+stalls for ~20 s and the worker dies on signal 11.
 
-Reproduces readily in-guest on a quiet host — NOT a special-environment interaction. On a spare, idle
-M1 Mac mini (8-core, 16 GB) it hangs with a single test, headless (`--display-capture`), within ~1 s of
-the `ext_timer_query` GPU context creating. The device-loss ring is dominated by the test's own
-`render 160x160 ... draws=1` interleaved with `compute` encoders, and the failing command buffer shows
-`gpu=0.000000..` — it never started; the queue was already wedged at its head (a victim, not the cause).
-(A faithful bare-metal raw-Vulkan reproduction has not been built; `ts-probe`'s `ts-copy` passes, which
-only means that probe does not reproduce the shape, not that the bug needs more than one in-guest test.)
+The fix keeps the device and stops the offender:
+- **KK** moves to a new Metal queue after a hang (macOS bans the queue, not the process). It
+  delivers from the CPU the signals a banned queue never fires, and it charges each hang to the
+  command pool whose work ran into it.
+- **zink** resets the context that caused `ZINK_HANG_LIMIT` hangs; past `ZINK_HANG_BUDGET` for the
+  screen, it resets any context that hangs. The worker defaults these to 2 and 4.
+- **vrend** creates robust contexts and refuses a reset one.
+- **zink** no longer crashes on a lost device's descriptor pools.
 
-The copy DISPATCH is not the root cause, and the "resolve-direct-to-dst" mitigation does not fix it.
-A/B on that host (verified 2026-10-10), control vs. mitigated KK, identical env (spawn worker, headless,
-same clone recipe):
-- Control (unmitigated `build-kk`): the mapped dylib was confirmed by `lsof` (15097240 B); hangs on the
-  first `ext_timer_query` `render 160x160` while desktop renders are still live in the ring.
-- Mitigated (`build-kk-kkq`): `kk_CmdCopyQueryPoolResultsToMemoryKHR`, for a timestamp-pool copy with
-  `VK_QUERY_RESULT_64_BIT` and no availability/partial, resolves the counter-heap entries straight into
-  the destination (`mtl_command_resolve_counter_heap` → `pDstRange->address`) and skips the compute copy
-  dispatch. It FIRES — within the failing command buffer the mitigated ring is `compute, render160,
-  compute` where the control's is `compute, compute, render160, compute, compute`, and the hang lands
-  deeper into the test's own `render 160x160` loop rather than on its first render — but still hits the
-  same `kIOGPUCommandBufferCallbackErrorHang`, same `gpu=0.000000..`. (The mitigated dylib's load is
-  inferred from that differential ring, not separately `lsof`-confirmed.)
-So removing the copy dispatch is correct but insufficient; the wedge is intrinsic to the timer-query
-render + counter-heap-timestamp (`vkCmdWriteTimestamp2`) loop itself. Leading suspects to probe next,
-not yet confirmed: the per-iteration compute (staging) + render + counter-heap write cadence on one KK
-queue, and residency of the direct-resolve device-address target (the ring's residency set lists
-`0 buffers`; the old path resolved to the pool BO, resident by construction). (A prior in-guest A/B had
-read "skipping only the dispatch clears the hang"; this control/mitigated A/B — same host, same env,
-control dylib `lsof`-confirmed, distinguished by the differential ring rather than one SKIP run —
-overrides it. The prior read was on a different host and GPU, windowed, under another VM's load; treat
-a single-arm SKIP run as inconclusive.)
+Measured on the piglit test: 4 GPU restarts with the desktop alive and a clean poweroff, against a
+dead VM before.
 
-The mitigation commit is byte-correct (`resolveCounterHeap` writes the same uint64 the 64-bit copy
-kernel would; the pending pool-BO resolve still folds, so `vkGetQueryPoolResults` stays correct) and
-removes an unnecessary dispatch, so it stands on `kk-hardening` as a correct-but-insufficient cleanup —
-not "the fix". Local/unpushed; the kosmickrisp manifest pin is NOT bumped for it. The copy kernel
-(`libkk_copy_queries`, `kk_query.cl`) is bounded — under `WAIT_BIT` it reads the slot and returns, no
-wait loop — so it never hung in its own execution either way.
+Where it lives: mesa fork branch `kk-gpu-hang` (`/Volumes/mesa-cs/mesa-hang`, four commits on
+`limina-kk 059715d2aa5`), virglrs branch `gpu-hang`, and limina `crates/limina-vmm/src/krun/mod.rs`.
+None of it is pushed, and the kosmickrisp and virglrs pins still name the stack without it.
 
-Repro venue note: a quiet spare host driven over ssh must run the worker with
-`LIMINA_WORKER_LAUNCH=spawn` (the default launchd path leaves the guest dark over ssh — no serial, net,
-qga, or present, vCPUs at 0%). If the host's Homebrew LLVM major differs from the one the zink/gallium
-build linked, that is a confound only for llvmpipe/draw, which zink does not use for GPU work — low.
+Still owed:
+- **Land it.** Push the branches, bump the pins, rebuild the host Mesa and cut a bundle.
+- **Work already queued still hangs.** A limit of N costs about N + 2 restarts, because the
+  offender's queued work runs after its reset. Each hang also stalls the virtio-gpu control queue
+  for the ~120 ms the watchdog takes.
+- **The refused app is not told.** The guest virgl driver has no reset-status path, so it sees
+  failed submits and a dead canvas, not `GL_GUILTY_CONTEXT_RESET`.
+- **Venus is not covered.** A venus context's hang reaches KK the same way, but nothing charges
+  it to a guest context or refuses it yet.
+
 ### Geometry shaders: the failures left on the piglit GS list
 KK runs geometry shaders on poly's compute emulation, on by default (`LIMINA_KK_GEOMETRY_SHADER=0`
 withdraws them). Under zink-on-venus the GS list (no fp64) passes 2501 of 2622; what still fails,
@@ -1144,10 +1167,27 @@ each deferred by choice when GS landed:
 - **`tes-gs-max-output -small -scan 1 50`** times out on both tiers.
 - `arb_gl_spirv` failures are the guest lacking `spirv-as`, not a driver result.
 Latent, no test reaches it yet: `nir_to_msl.c`'s `load_output` builds its mask with a 32-bit
-`1 << location`. A fix (53ed2368595, branch `limina-kk-output-mask`) and a poly change that computes
-each GS input vertex index once (6e8b33cc5a4, `limina-kk-gs-vertex-hoist`, GS MSL about 3.7×
-smaller, no behaviour change) wait for the next limina-kk change. The hoist needs the GS piglit
-lists first: host probes do not cover adjacency or line inputs.
+`1 << location`. A fix ("kk: test a load_output's location against a 64-bit mask") and a poly change
+that computes each GS input vertex index once ("poly: compute each geometry shader input vertex
+index once", GS MSL about 3.7× smaller, no behaviour change) are not on `limina-kk`: each sits on a
+local side branch of its own (`limina-kk-output-mask`, `limina-kk-gs-vertex-hoist`) that no remote
+carries. The hoist needs the GS piglit lists first: host probes do not cover adjacency or line
+inputs.
+
+### Three commits on `kk-hardening` are unreachable from the pin
+`kk-hardening` in `/Volumes/mesa-cs/mesa` is a local branch no remote carries, on an older base than
+`limina-kk` (the pin, `059715d2aa5`): `git log limina-kk..kk-hardening` lists 105 commits. All but
+three have a counterpart on `limina-kk`, by patch id or, for ten rebased ones, by subject. The three
+that do not:
+- "zink: fix lost-wakeup deadlock in the multi-context unflushed-batch wait" (`a9a8381b7ea`);
+- "zink: re-look-up the pipeline when vertex elements change and vertex input is static"
+  (`abe1407d4b3`);
+- "kk/query: resolve 64-bit timestamp copies straight to the destination" (`ba52f87b8ab`). It
+  drops a compute dispatch but fixes nothing: the timer-query hang it was written for is the GPU
+  watchdog (above).
+
+Next: decide each on its merits, carry what is wanted onto `limina-kk` (and its ledger row), and
+push or delete the branch so nothing lives only on this disk.
 
 ---
 
@@ -1169,20 +1209,57 @@ one file), but a process that opens several render-node files gets 64 each, and 
 descriptors. Fix shape: a device-wide bound beside the per-file one, which needs a counter on
 `virtio_gpu_device` (the `0001` hook patch).
 
-### Reserved fields go unchecked and the guest interface has no version
-`crates/limina-gpu-wire/src/ring.rs` never reads `CmdHeader.flags`, no `_pad` field is checked, and
-trailing payload bytes are accepted although `Error::BadPayload`'s doc says otherwise. The guest
-module checks `pad` only in the FENCE ioctl. Anything an old host ignores can never be given a
-meaning later. Fix: reject non-zero values now, while no guest sets any, and version the guest
-interface (`docs/design/metal-transport-delivery.md` §1 notes the gap).
+### Reserved fields go unchecked, and the ioctl interface has no version
+The ring protocol is versioned: `limina_gpu_wire::VERSION` (5) is written by the producer and
+checked when the host attaches (`crates/limina-gpu-wire/src/ring.rs`, `Consumer::attach`), and
+`DRM_VIRTGPU_LIMINA_INFO` reports it to the guest driver. The guest module's ioctl structs
+(`guest/virtio-gpu-limina/virtgpu_limina_drm.h`) carry no version. Within the ring, nothing reads
+`CmdHeader.flags`, no `_pad` field is checked, and a payload longer than its command and its
+declared tails is accepted, its extra bytes dropped, although `Error::BadPayload`'s doc covers
+"trailing bytes that do not add up". The guest module checks `pad` only in the FENCE ioctl.
+Anything an old host ignores can never be given a meaning later. Fix: reject non-zero reserved
+values and stray trailing bytes now, while no guest sends any, and give the ioctl interface a
+version.
 
-### A guest hands Apple's library loader arbitrary bytes
+### A guest hands Apple's library loader and MSL compiler arbitrary bytes
 `CREATE_LIBRARY_DATA` (`crates/limina-gpu-host/src/exec.rs`, `create_library_data`) passes up to
 `MAX_LIBRARY_DATA` (256 MiB) of guest-written bytes to `newLibraryWithData:`, a parser of Apple's
-whose robustness against malformed input nobody here has measured. The bytes are copied out of the
-arena before parsing, so the guest cannot change them mid-parse, and a load failure fails the reply
-only. A crash in the loader takes the GPU host process, and every context of the VM with it. Next:
-fuzz the loader with mutated metallibs in a throwaway process before anything untrusted runs it.
+whose robustness against malformed input nobody here has measured. `CREATE_LIBRARY`
+(`create_library`) is the same trust problem one layer up: guest MSL source handed to the Metal 4
+compiler. The bytes are copied out of the arena before parsing, so the guest cannot change them
+mid-parse, and a failure fails the reply only. A crash in either takes the GPU host process, and
+every context of the VM with it; `limina-gpu-host` runs unsandboxed (unlike `limina-netd`, which
+calls `sandbox_init`), and no fuzz target reaches either path. Next: fuzz both with mutated
+metallibs and MSL in a throwaway process before anything untrusted runs them, and sandbox the GPU
+host.
+
+### `LIMINA_GPU_METAL=0` turns the transport on
+`metal_ext::start` (`crates/limina-vmm/src/krun/metal_ext.rs`) tests only whether the variable is
+set (`var_os(..).is_none()`), so any value, `0` included, starts the GPU host. Fix: read the
+value, not its presence.
+
+### The GPU host has no resource budget
+Each arena is capped at 4 GiB (`MAX_ARENA`, `crates/limina-gpu-host/src/metal.rs`), but neither
+the number of arenas a context creates nor the number of objects is bounded. Arenas shared through
+a blob resource are not placed in the 16 GiB arena window (libkrun `devices/src/virtio/gpu/ext.rs`,
+the `ARENA_FLAG_BLOB` arm of arena creation), so the window does not bound them either. Every object
+also keeps a copy of its creation payload for restore (`Record.payload` in `crates/limina-gpu-host/src/journal.rs`), and a
+`CREATE_LIBRARY_DATA` is filed with its bytes inline, up to 256 MiB per library. One guest process
+can therefore grow the GPU host without limit. Fix: a per-context budget of arenas, objects and
+recorded bytes, refused with `OutOfMemory` like an allocation failure.
+
+### Nothing fuzzes the Metal transport
+The fuzz workspace (`fuzz/`) covers the control frame, CTAP2 and the vdagent stream; no target
+reaches the command ring's consumer, the executor's decoders or the library loader, though the ring
+and every command come from a guest. Next: a ring-consumer target and an executor-decode target
+(no Metal needed for the decode half), then the loader (previous entries).
+
+### Lead, unconfirmed: the GPU host may inherit the worker's descriptors
+`GpuHost::spawn` starts the GPU host with `posix_spawn` and no file actions or attributes
+(`crates/limina-gpu-host/src/client.rs`), so every worker descriptor not marked close-on-exec
+crosses into it. Whether any does is not checked. Next: list the GPU host's open descriptors on a
+running VM (`lsof -p`); if any are the worker's, spawn with `POSIX_SPAWN_CLOEXEC_DEFAULT` and pass
+only what it needs.
 
 ### Fence order within a file is only a userspace promise
 All of a file's fences share one dma-fence context (`lf->fence_ctx` in
@@ -1211,8 +1288,10 @@ which ends every context of the VM. Fix: treat both as recoverable, destroying t
 Restore reproduces Metal resource IDs and GPU addresses by relying on allocator behaviour measured on
 an M1 under macOS 26.6 (first fit, the 32 KiB granule and 16 KiB guard, slot reuse within 100
 tries). Each value is verified, so a macOS change fails safe, but nothing says so before users hit
-it. Next: run the `are_host_values_*` tests and `footprints_of_small_objects` on every host OS we
-ship to, as a gate.
+it. The two tests that measure it, `are_host_values_reproducible_across_gpu_hosts`
+(`crates/limina-gpu-host/tests/first_light.rs`) and `footprints_of_small_objects`
+(`crates/limina-gpu-host/src/metal.rs`), are `#[ignore]` and so outside the suite. Next: run them
+on every host OS we ship to, as a gate.
 
 ### Every context of a VM shares one GPU host process
 Cross-context isolation rests on Metal 4 residency sets, which Apple documents as paging control,
@@ -1224,7 +1303,7 @@ Every id is a bare integer (ctx, arena, export, surface, doorbell, seqno, Mach p
 `(u32, u32)` keys and ctx 0 meaning "orphan"; newtypes and an `ArenaOwner` enum would turn missed
 checks into compile errors. Surface send rights are flattened to `u32` (`into_raw`) two layers early
 and leak when a bind is refused; moving a `SurfacePort` would close that. `Result<_, String>` crosses
-the `GpuExtension` trait. `exec.rs` mixes about 41 `unsafe` blocks into its handlers because objc2
+the `GpuExtension` trait. `exec.rs` mixes 43 `unsafe` blocks into its handlers because objc2
 marks the Metal setters unsafe; a thin typed wrapper, like virglrs's `vulkan.rs`, would separate the
 validator from the FFI.
 
@@ -1233,27 +1312,15 @@ validator from the FFI.
 `limina-ring` (`crates/limina-ring`) is the protocol-free core of `limina-gpu-wire`'s command ring:
 the control block's single-writer lines, the park/publish/recheck handshake, the position checks.
 The Metal transport keeps its own copy, because its framing, `completed`/`error` fields and
-`VERSION` are frozen by the generated C header and the guest driver. Moving it onto the core is a
+`VERSION` are frozen by the generated C header and the guest driver. The two have diverged:
+`limina-ring`'s consumer may attach after the producer has published (`ef686860`, for netd, whose
+guest can send before netd attaches), while the wire ring's `Consumer::attach` still refuses a ring
+whose `tail` is not 0 (`crates/limina-gpu-wire/src/ring.rs`). Moving it onto the core is a
 layout-preserving refactor (the `c_header` test fails on any offset drift), for a quiet moment in
-the transport; until then a fix to either handshake belongs in both.
+the transport, and it has to settle which attach rule the transport wants; until then a fix to
+either handshake belongs in both.
 
 ## Video
-
-### AV1 has no host decoder on M1/M2, so AV1 playback there never counts as video
-virglrs offers AV1 only where `VTIsHardwareDecodeSupported` says so (M3+), so on an M1 or M2 the
-guest sees no AV1 profile and decodes with its own dav1d. The host decoder never runs, and the
-display-wake heuristic (guest audio plus host decode, `window/wake_policy.rs`) never fires for an
-AV1 video there. Measured 2026-10-03 on the dev Mac (M1 Max) with a stock Debian guest: Firefox
-playing VP9 held the assertion, AV1 did not, and the guest's `vainfo` listed no AV1 profile. The
-enhanced tier is covered by the relayed inhibitor, which Firefox registers whatever the codec.
-Fix shape: port the C backend's dav1d fallback, which reverses the "there is one decoder, and it is
-VideoToolbox" decision in `third_party/virglrs/docs/design.md`, so that decision's text changes
-first. The constraints are recorded in `docs/design/av1-decode.md` ("Not ported: the dav1d
-fallback"): replay from the last shown key frame, feed the serializer's own units, ask for
-invisible frames, refuse cleanly. The same decoder would bring back the super-resolution fallback.
-Costs to weigh: a new `unsafe` binding module, dav1d in the bundle, host CPU instead of guest CPU
-plus a copy into the guest's surfaces, and the harness's two-leg equivalence across a decoder
-switch. To be agreed with the virglrs session before anyone builds it.
 
 ### Stock-tier Firefox never gets hardware decode (virgl offers I420/YV12 as decode targets)
 `virgl_is_video_format_supported` ignores profile/entrypoint and answers with the generic sampling
@@ -1263,18 +1330,25 @@ three-plane formats tie above NV12 and the last advertised (IYUV) wins. Firefox'
 only NV12/P010, logs `Unsupported VA-API surface format 808596553` (I420), destroys its frame pool and
 decodes in software on every stream, codec-independent. Chrome and GStreamer choose NV12 themselves;
 I420 decode itself is correct (framemd5 bit-identical to software), which is why
-`ffmpeg -hwaccel vaapi` hides it. The enhanced tier carries the fix (mesa-guest 0011 withholds
-YV12/IYUV for `PIPE_VIDEO_ENTRYPOINT_BITSTREAM`). Owed: send it upstream so stock Firefox gets the
-hardware path — stock images load vanilla mesa, and libva probes `/usr/lib64/dri-freeworld/` ahead
-of `/usr/lib64/dri/`, so RPM Fusion's unpatched `mesa-va-drivers-freeworld` wins even where ours is
-installed. The durable fix is a virgl wire query for per-codec decode-target formats (the protocol has
-none). Unchecked: other VA-DMABUF consumers (GStreamer `vaapisink`, Chromium's other paths). Stock-tier
-validation vehicles: Chrome and GStreamer (`docs/design/h264-hevc-decode.md`).
+`ffmpeg -hwaccel vaapi` hides it. The enhanced tier carries the fix ("virgl: do not offer
+three-plane 4:2:0 as a decode target" on `limina-guest` withholds YV12/IYUV for
+`PIPE_VIDEO_ENTRYPOINT_BITSTREAM`). Owed: send it upstream so stock Firefox gets the hardware path —
+stock images load vanilla mesa, and libva probes `/usr/lib64/dri-freeworld/` ahead of
+`/usr/lib64/dri/`, so RPM Fusion's unpatched `mesa-va-drivers-freeworld` wins even where ours is
+installed. Its upstream form is ready on `upstream/guest-2026-10`; the ledger
+(`docs/upstreaming/ledger/mesa.md`) has it `upstream-now` with no issue or MR yet, and no upstream
+suite test, since no stock host enables virgl video decode, so the case rests on the code and
+ffmpeg's exact-match selection. The durable fix is a virgl wire query for per-codec decode-target
+formats (the protocol has none). Unchecked: other VA-DMABUF consumers (GStreamer `vaapisink`,
+Chromium's other paths). Stock-tier validation vehicles: Chrome and GStreamer
+(`docs/design/h264-hevc-decode.md`).
 
 ### Decode targets on the stock tier are one-page stubs; the remaining zero-copy work
 On vanilla mesa an exported VA decode surface's dmabuf is a 4096-byte stub at every resolution
-(`spikes/va-dmabuf-size`). The enhanced tier gives decode targets real guest memory (mesa-guest 0013,
-0014) and dropped the too-small-export refusal (0018), so Firefox has its hardware decoder there.
+(`spikes/va-dmabuf-size`). The enhanced tier gives decode targets real guest memory ("virgl: give
+video decode targets real guest memory" and "virgl: allocate a decode target as one composite
+planar resource" on `limina-guest`) and carries no refusal to export a too-small dmabuf, so Firefox
+has its hardware decoder there.
 Still owed, owned by `docs/design/blob-decode-targets.md` §Phases: glupload's direct importers refuse
 everything (`DirectDmabufExternal … cannot produce texture-target 2D`) and fall back to the copy
 uploader; the guest/host layout contract (the guest computes tight strides, the IOSurface is
@@ -1282,13 +1356,14 @@ Metal-aligned, and the host writeback copy reconciles them) must land before the
 stock tier, reachable only by upstreaming.
 
 ### Guest virgl gates the composite decode-target create at the caller, not at the emitting site
-mesa-guest 0017 added the sampler-bitmask check (`is_format_supported(buffer_format,
-PIPE_BIND_SAMPLER_VIEW)`) to `virgl_video_create_buffer`. The site that emits the planar create,
+"virgl: allocate a decode target as one composite planar resource" on `limina-guest` gates the
+composite shape on the sampler bitmask (`is_format_supported(buffer_format,
+PIPE_BIND_SAMPLER_VIEW)`) in `virgl_video_create_buffer`. The site that emits the planar create,
 `virgl_resource_create_front` (`virgl_resource.c` on `limina-guest`), checks only
 `VIRGL_RESOURCE_FLAG_VIDEO_TARGET` && `VIDEO_PLANAR_TARGET` && more than one plane. Unreachable today
 only because the video path is the one caller that sets `VIRGL_RESOURCE_FLAG_VIDEO_TARGET`. Any new
-caller, or a relaxed video gate, brings back what 0017 fixed in its worst form: the kernel has already
-handed out the handle, the host's refusal is invisible, and the context goes to `Illegal resource`
+caller, or a relaxed video gate, brings back what the gate prevents in its worst form: the kernel
+has already handed out the handle, the host's refusal is invisible, and the context goes to `Illegal resource`
 for the rest of its life, silently dropping every later submission. Fix: move (or duplicate) the
 sampler lookup into `virgl_resource_create_front` on `limina-guest`, re-export, bump the mesa RPM
 release, redeliver.
@@ -1301,11 +1376,10 @@ VA-API decodes run on a thread per codec and every read of a target waits for it
   needs the guest to fence END_FRAME (mesa-guest, design phase 3) and the host to trust that per
   codec (phase 4). The same guest fence closes the existing race for a decode already queued when
   the lend happens.
-- **Per-plane uploads still run on the control thread.** Only the VideoToolbox wait left it; the
-  `glTexSubImage2D` of each plane happens when a reader settles the target. Measured on the stock
-  tier, whose targets are all per-plane (`spikes/flush-latency/RESULTS.md`, "The stock tier"):
-  0.15-0.46 ms a plane, ~0.9 ms a frame and 2.7% of the render thread at 4K VP9. Moving them off
-  (unpack buffers, or a decode-thread GL context) can save no more than that.
+- **A per-plane target with only some planes backed by surfaces still uploads synchronously.** A
+  per-plane target whose planes are all surfaces has each plane's rows written on the decode thread
+  (virglrs `bcfe1ad`, "vrend: write a surface-backed video buffer's planes on the decode thread"), so the stock tier's decodes stay asynchronous; one with only some of its
+  planes as surfaces keeps the `glTexSubImage2D` on the render thread when a reader settles it.
 - **A playback's first frames still wait a few ms each for room in the queue.** gst-va submits
   frames ahead at start-up, and 4-8 decodes wait for a four-deep queue, ~4 ms each and 8-10 ms in
   all. A deeper queue would remove it at the cost of more undelivered pictures holding the
@@ -1374,7 +1448,11 @@ without underruns.
 is verified live only: `l1_session_helper.rs` exercises the RemoteDesktop path and
 `l2_clipboard_vdagent.rs` deliberately stops the helper. Nothing automated covers helper reconnect
 after a supervisor restart or after the D-Bus session dies. (Per-peer serials and stale-offer
-rejection are covered by `l1_clipboard_multi_session.rs`.)
+rejection are covered by `l1_clipboard_multi_session.rs`.) The seat gate in `layout_gate.rs` is
+unit-tested through `poll` with the seat state passed in, and `seat_owner_is` on sample seat
+files; `SeatWatch` (the inotify watch) and `seat_active` (the live read of
+`/run/systemd/seats/seat0`) have no direct test, and no L1 runs a seatless session beside a fronted
+one.
 
 ### A stock guest's idle inhibitors never reach the host
 Measured 2026-10-03 on a stock F44 guest, SELinux Enforcing: Firefox playing a video registers two
@@ -1416,17 +1494,24 @@ rerunning the count with `--no-net`, and against a guest with no NAT traffic.
 ## TPM
 
 ### Debian's arm64 kernel has no driver for our TPM
-Debian testing's `linux-image-*-arm64` (seen on `7.1.13+deb14`) builds `CONFIG_TCG_TIS_CORE=m` but
-leaves `CONFIG_TCG_TIS` unset, so nothing binds `tcg,tpm-tis-mmio`: the device tree node and the
-platform device appear, `/dev/tpm0` never does. The firmware still measures the boot and hands
-the event log to Linux, so systemd waits for `/dev/tpm0` and `/dev/tpmrm0` until its 90 s
-timeout, then boots without a TPM. That is the degradation every stock guest without `tpm_tis`
-gets from `tpm = true`. Fedora builds every driver below; Debian's options, from its packaging
-configs (`debian/config/config` and `arm64/config`, to be re-read on a booted kernel before
-building on any of them):
+Our TPM is a memory-mapped TIS on both machines: `tcg,tpm-tis-mmio` in the device tree, and on the
+ACPI machine (the default) `MSFT0101` with a TPM2 table naming start method 6, TIS (libkrun
+`devices/src/acpi.rs`, `build_tpm2`). Debian testing's `linux-image-*-arm64` (seen on
+`7.1.13+deb14`) builds `CONFIG_TCG_TIS_CORE=m` but leaves `CONFIG_TCG_TIS` unset, so `tpm_tis`,
+which binds both, is absent: the device appears, `/dev/tpm0` never does. The firmware still
+measures the boot and hands the event log to Linux, so systemd waits for `/dev/tpm0` and
+`/dev/tpmrm0` until its 90 s timeout, then boots without a TPM. That is the degradation every stock
+guest without `tpm_tis` gets from `tpm = true`. Fedora builds every driver below; Debian's options,
+from its packaging configs (`debian/config/config` and `arm64/config`, to be re-read on a booted
+kernel before building on any of them):
 
-- **TPM on SPI behind an emulated SoC SPI controller.** Debian has `TCG_TIS_SPI=m`, the generic
-  driver (`tcg,tpm_tis-spi`), and builds no `SPI_VIRTIO` and no `SPI_PL022`, but Debian and
+- **ACPI with a CRB TPM: the route on the default machine.** Both kernels build `tpm_crb` in, and
+  ACPI already describes the whole platform, so what is missing is the interface: a CRB register
+  file beside the TIS one in front of janus, a TPM2 table with the CRB start method, and CRB in
+  Cardea, which speaks only the MMIO TIS for measured boot (`docs/design/firmware-and-acpi.md`,
+  *TPM on Debian*, where CRB is left optional).
+- **TPM on SPI behind an emulated SoC SPI controller: the device-tree fallback.** Debian has
+  `TCG_TIS_SPI=m`, the generic driver (`tcg,tpm_tis-spi`), and builds no `SPI_VIRTIO` and no `SPI_PL022`, but Debian and
   Fedora both build `SPI_BCM2835`, `SPI_OMAP24XX`, `SPI_IMX`, `SPI_SUN6I`, `SPI_MESON_SPICC` and
   `SPI_TEGRA114`; BCM2835's is the simplest register model. TCG's SPI protocol carries the same
   TIS register accesses, so janus and the TIS register file stay as they are; the new parts are
@@ -1434,13 +1519,10 @@ building on any of them):
   only the MMIO TIS (no SPI) and passes the device tree through unmodified, so the firmware
   would keep the MMIO TIS for measured boot and disabling that node before the OS sees the tree
   would be new Cardea work, or a kernel with both drivers binds two TPM devices to one TPM.
-  The one stock-kernel route found; a few days of work and a second OS-facing interface to test.
+  A few days of work and a second OS-facing interface to test, for the device-tree machine only.
 - **I2C: not viable.** Debian has no generic `TCG_TIS_I2C`, only `TCG_TIS_I2C_CR50` (expects
   Google's cr50 vendor ID: an impersonation) and `TCG_TIS_I2C_INFINEON` (believed TPM 1.2 parts
   only), and no `I2C_VIRTIO`, so it also needs an emulated I2C controller.
-- **ACPI with a CRB TPM.** Both kernels build `tpm_crb` in, but Cardea speaks only the MMIO TIS
-  (no CRB), and arm64 Linux takes ACPI or a device tree, never both: the whole platform would have
-  to be described in ACPI. Out of proportion for this.
 
 Until one lands, a TPM on a Debian guest costs 90 s per boot and gives nothing; leave it off.
 
@@ -1463,7 +1545,10 @@ while it reads the SBS battery's sysfs, the completion interrupt then calls `com
 memory and the kernel panics. That happened in 2 of 53 stock boots, and in none of 60 without the
 battery device (`spikes/snd-boot-stall/RESULTS.md`). The host mitigation handles the virtio-i2c
 kick on the vCPU that made it, from a cached battery snapshot. That shrinks the window to interrupt
-delivery but does not close it. Owed: carry one of the posted guest fixes on our kernel fork's
+delivery but does not close it: with it, 0 stalls in 100 boots (measured 2026-09-23; at the
+earlier 2 in 53 a clean 100 happens by chance about 2% of the time). The ACPI machine keeps the
+battery on virtio-i2c too (`BAT0` under the adapter, libkrun `devices/src/acpi.rs`), so both
+machines carry the window. Owed: carry one of the posted guest fixes on our kernel fork's
 `limina` branch for the enhanced tier (the kref or virtqueue-reset patch, not the uninterruptible
 wait). The stock tier waits for Fedora to ship a fixed kernel.
 
@@ -1476,6 +1561,22 @@ manifest, and `limina install-guest-tools [<vm>]`, which downloads or takes `--p
 stages into an ephemeral read-only `--share`, and runs the installer through the agent or prints the
 one-line `sudo` command. The installed `tools_version` goes into the VM definition and is re-checked on
 connect: a mismatch prompts, never refuses to boot.
+
+### `deliver-payload.sh` verifies only the agent binaries
+After the installer runs, `scripts/provision/deliver-payload.sh` checks that the installed
+`limina-agent` and `limina-agent-session` hash to the payload's, and fails the delivery if not. It
+does not check the kernel or the mesa it installed: the installer's kernel-default lines are
+printed for a human to read, and nothing compares `rpm -q` or `uname -r` against the payload. A
+delivery whose mesa or kernel did not take reports success. Fix: verify every component the payload
+carries, from the payload manifest the next entry calls for.
+
+### The guest Mesa pin is not what any delivered image runs
+`third_party/manifest.toml` pins `[mesa-guest]` at `0642e0178` on base `mesa-26.2.5`, and
+`patches/mesa-guest/` is exported from it. Every enhanced image and the current payload (r38) run mesa `26.2.3-6.limina`, built at `14952457e03` on `mesa-26.2.3`
+(`docs/images.md` §Component versions), which the checkout at `/Volumes/mesa-cs/mesa-guest` is still on. Neither rev
+is an ancestor of the other. So a rebuild from the pin ships a series no image has run, and
+`patches/mesa-guest/` describes no delivered build. Next: build and deliver the pin, or move the pin
+back to the delivered rev until that happens.
 
 ### The installer does not check the payload against the guest release
 `scripts/provision/install-enhanced.sh` checks that the mesa RPMs share one NEVRA but never that the
@@ -1521,15 +1622,22 @@ assemble + sign + dmg phase measured ~25 s (2026-08-31), the rest is the cargo b
 avoids, and `build-app.sh` already supports `LIMINA_ALLOW_ADHOC=1` / `LIMINA_SIGN_IDENTITY=-` and
 `LIMINA_NO_TIMESTAMP=1`. What `bundle` still has: `--open` (a LaunchServices launch booting the L1
 `limina.hold` guest — the Dock-launch path where launchd's 256-fd limit bit) and independence from
-`/Volumes/mesa-cs` (`app` sources the KK/zink dylibs from it). Fix: add `--open` to `app` and delete
-`bundle`; the references are `docs/dev-onboarding.md` and `CLAUDE.md`. The module doc in
-`xtask/src/main.rs` still says `bundle` assembles `target/Limina.app`.
+`/Volumes/mesa-cs` (`app` sources the KK/zink dylibs from it). The two also sign different
+identities: `bundle` writes `CFBundleIdentifier` `br.dev.kov.limina` (`xtask/src/main.rs`), `app`
+`eti.noronha.limina` (`scripts/build-app.sh`), so a smoke launch does not exercise the shipping
+identity. Fix: add `--open` to `app` and delete `bundle`; the references are
+`docs/dev-onboarding.md` and `CLAUDE.md`. The module doc in `xtask/src/main.rs` still says `bundle`
+assembles `target/Limina.app`.
 
-### virtiofs DAX window
-Not implemented (`docs/roadmap.md` §M5; `docs/design/16k-page-requirement.md`). Wire libkrun's
-virtio-fs shm region (`VirtioShmRegion`, `fs/device.rs`), confirm window alignment and
-FUSE_SETUPMAPPING on 16 KiB host pages (testing the stock-4k guest separately from the 16k one), and
-settle host↔guest uid mapping. Without DAX every guest gets plain FUSE read/write.
+### Enable and measure the virtiofs DAX window
+libkrun supports DAX on macOS: the device builder takes a window size (`set_dax_window_size`,
+`src/libkrun/src/api/device_builders.rs`), the VMM creates the shm region from it, and the macOS
+passthrough implements `FUSE_SETUPMAPPING` by mapping file ranges into that window through HVF
+(`devices/src/virtio/fs/macos/passthrough.rs`, `setupmapping`). limina never sets a window
+(`fs_device` in `crates/limina-vmm/src/krun/mod.rs`), so every guest gets plain FUSE read/write.
+Owed: enable it, confirm window alignment and `FUSE_SETUPMAPPING` on 16 KiB host pages (the stock-4k
+guest separately from the 16k one, `docs/design/16k-page-requirement.md`), settle host↔guest uid
+mapping, and measure it against plain FUSE before making it the default.
 
 ---
 
@@ -1549,10 +1657,10 @@ failure says which side moved. Open: the trigger, and whether the KK plane-index
 
 ### Nothing exercises the host half of venus ghost containment
 `vkr_ghost_containment.rs` asserts that a refused import leaves the context alive. On an enhanced
-image, mesa-guest 0006 (the synchronous dma-buf import allocate) makes the refusal synchronous, so no
-ghost is created, virglrs's ghost path (`Lookup::Ghost` → `Dispatched::Ghosted`) never runs, and the
-test passes on the guest fix alone. The host half covers stock and older guests. Proving it needs an
-env-gated, off-by-default fault-injection hook in virglrs that fails the Nth create of a named command
+image, "venus: allocate dma-buf import memory synchronously" on `limina-guest` makes the refusal
+synchronous, so no ghost is created, virglrs's ghost path (`Lookup::Ghost` →
+`Dispatched::Ghosted`) never runs, and the test passes on the guest fix alone. The host half
+covers stock and older guests. Proving it needs an env-gated, off-by-default fault-injection hook in virglrs that fails the Nth create of a named command
 for a context. The one async path left after the guest fix is `vkCreateImage` on a
 memory-requirements-cache hit: create the same image key twice (the miss is sync and seeds the cache,
 the hit is async), inject on the second, and assert the context survives and the ghost is logged. The
@@ -1564,7 +1672,10 @@ coverage.
 and only windowed workers set it. So every headless boot presents synchronously — and headless is what
 gets scored automatically (fluster, the replay corpora, `capture.sh`, virglrs's `harness/vm/frame.py`).
 `venus_fence_present` and `venus_park_on_busy_reset` force `LIMINA_FENCE_PRESENT=1` and cover the blob
-chain, and the perf battery runs `--window`; what no gate reaches is a parked classic (vrend) scanout.
+chain; `metal_fence_present` forces it too and checks that a Metal-transport desktop's flushes are
+fenced and held (the worker's `flushes are fenced` line), which is the transport's surfaces, not a
+classic resource; and the perf battery runs `--window`. What no gate reaches is a parked classic
+(vrend) scanout.
 Flipping the default for headless is small (with `ack_active` false the cookie leaves `unconfirmed` at
 present time and the hold ends after `latch_delay`), but first: the flip also arms venus parking
 headless (`try_park_present` checks `fence_present_enabled()` first), changing present timing for the
@@ -1577,10 +1688,13 @@ and the frame oracle reaching the parked path with no knob set.
 `l2_desktop_restore_landmarks.rs` fails with `gpu restore: extension rings: GPU host did not reply`
 (libkrun `virtio/gpu/worker.rs`, the `ext.restore_rings` arm), then `staged snapshot replay failed;
 guest session will restart`. Seen in three full-suite runs on different branches (2026-10-18,
-2026-10-19 and 2026-10-20, identical lines); the test passed alone straight after each time. Open: what the rings wait on
-when the host does not reply, whether the reply deadline is sized for a loaded host or the reply is
-really lost, and a vehicle that reproduces it (loop the test under suite-like load with the VM held
-on failure).
+2026-10-19 and 2026-10-20, identical lines); the test passed alone straight after each time. The
+words are the GPU host client's timeout (`crates/limina-gpu-host/src/mach.rs`, the reply wait), and
+every GPU-host call, restore included, shares one flat 10 s deadline (`CALL_TIMEOUT_MS`,
+`crates/limina-gpu-host/src/client.rs`). That makes a slow restore under suite load the first
+suspect, not an established cause. Open: what the rings wait on when the host does not reply,
+whether the reply deadline is sized for a loaded host or the reply is really lost, and a vehicle
+that reproduces it (loop the test under suite-like load with the VM held on failure).
 
 ### `the_guest_vblank_falls_on_the_host_grid` has single vblanks far off the grid under load
 `l2_host_vblank.rs` allows 50 µs (1200 ticks) of phase error on each of 30 vblanks; failing runs have
@@ -1621,10 +1735,10 @@ parallel nextest lane.
   reported on this. Confirm its configuration arms the path it claims to score.
 - When two independent fixes uphold one invariant (guest-side and host-side), each needs its own
   vehicle. A test that passes because of one proves nothing about the other.
-- The limina-test harness runs pre-built binaries from `target/debug/`; `cargo test -p limina-test`
-  does not rebuild them. An A/B of shipped behaviour must rebuild and re-codesign between arms.
-- A test harness must read the ssh port the supervisor allocated, never assume 2222. When guests share
-  credentials a wrong-VM connection is invisible, so prove guest identity with a per-handle marker.
+- When guests share credentials a wrong-VM connection is invisible, so a harness proves guest identity
+  with a per-handle marker (reading the allocated ssh port is CLAUDE.md's rule).
+- A test that passes alone but fails in the suite is an oracle defect or a product defect, never
+  noise.
 - Measure a tail with many samples and report counts. One sample per cell gives a precise-looking
   number that does not reproduce.
 - Before measuring a loaded cell, have it print the guest's own idle percentage: a load that never
@@ -1654,6 +1768,7 @@ parallel nextest lane.
 
 **Diagnostics and guards**
 - A diagnostic must not change the state it observes.
+- A check enforced only in the guest kernel module is not a host bound.
 - A guard's doc comment must match its measured trajectory, not an endpoint reading. A guard that never
   binds, documented as coverage, is worse than none.
 - A high-water-mark counter must alert on growth, not level, or it fires forever after one episode.

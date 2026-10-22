@@ -66,5 +66,53 @@ worktree with its own build dir and boot with `LIMINA_KK_ICD` set to that build'
 the shared build stays untouched. Comparing the trace of a failing run with one a sync makes pass
 is what found the meta push-set clobber behind `sgis_generate_mipmap@gen-teximage`.
 
-The failure split against the upstream rig is in `docs/hardening-backlog.md`, in the two piglit
-entries under GPU correctness.
+## Against the upstream rig
+
+The same 1871-test selection ran on the upstream rig, measured 2026-10-05: stock QEMU 10.2 +
+virglrenderer 1.3.0 on an Intel host, guest Mesa `main` b39d173ca93, surfaceless, so 125 tests never
+reached the driver there (`spikes/upstream-repro/virgl-pbo-upload-wait/`). The limina side is the
+2026-10-06 run above.
+
+**Fail on both stacks** (guest Mesa or vrend behaviour, so upstream candidates):
+- `copyteximage 3d`.
+- `arb_get_texture_sub_image-get`/`-getcompressed` on compressed 2D. With Fedora's Mesa,
+  `-getcompressed` segfaults in the guest.
+- `getteximage-targets 2d_array s3tc`: zeros from layer 6 on.
+- `fbo-readpixels-depth-formats`: float depth reads 0.999985 for 1.0, a 24→32-bit expansion off by
+  0x80.
+- `arb_shader_image_load_store@early-z`: half the occlusion count.
+- `arb_shader_image_load_store@invalid`: out-of-bounds and invalid-format image atomics return
+  garbage instead of zero.
+- `ext_transform_feedback2@draw-auto offset`.
+- `arb_texture_buffer_object@max-size` (128 MiB, flaky on the rig).
+
+**Fail only on the rig** (pass on limina):
+- `arb_transform_feedback_overflow_query-basic` and `arb_query_buffer_object@qbo`.
+- `getteximage-targets cube_array s3tc`.
+- `teximage-colors` RGB 3_3_2, off by one LSB.
+- `tessellation triangle_fan flat_first`.
+
+**Fail only on limina**, about 100 tests, the same on the stock and enhanced guests. Running each in
+the enhanced guest under zink-on-venus as well (`MESA_LOADER_DRIVER_OVERRIDE=zink`, which reaches
+KK without vrend) splits them:
+- **Pass under zink-on-venus, so they are in virglrs vrend.** Its GLES 3.1 flavour has no geometry
+  shaders or tf3, and lacks image caps. That accounts for the image load/store, SSBO and most
+  transform-feedback failures, plus BPTC float uploads, `getteximage-formats`, `pos-array` and DSA
+  `transformfeedback-buffer*`.
+  - Texture buffers reach vrend because KK emulates R32G32B32 texel buffers ("kk: emulate
+    R32G32B32 uniform texel buffers", `80be4bf1b3b` on `limina-kk`), which gives host zink
+    `OES_texture_buffer`; 22 texture-buffer tests pass under vrend. Still failing there: the legacy
+    ALPHA, LUMINANCE, LUMINANCE_ALPHA and INTENSITY formats in
+    `arb_texture_buffer_object@formats (fs|vs, arb)`.
+  - All 27 timeouts (300 s) are indexed draws under transform feedback, which GLES refuses.
+  - virglrs's desktop flavour passes 69 more of these and regresses 26 uploads.
+- **Fail under zink-on-venus too, so they are in KK or zink:**
+  `arb_draw_indirect-draw-elements-prim-restart-ugly` (passes on virglrs's desktop flavour),
+  `arb_shader_image_load_store@host-mem-barrier`, `ext_transform_feedback2@counting with pause`
+  and the five geometry-shader xfb tests.
+- **Fence waits that give up.** "waiting got error - 16, slow gpu or hang?" after 15–40 s turns a
+  pass into a fail on either guest. `vbo-subdata-*` fail this way in some full runs and pass 3/3 run
+  alone (`rep.sh`), so treat a lone difference with that line as a host stall.
+
+What is still owed on these is in `docs/hardening-backlog.md` (GPU correctness, and the KosmicKrisp
+entries).

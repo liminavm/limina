@@ -37,11 +37,12 @@ every temporal unit, and returns **a picture per frame including no-show frames*
 when each frame is wrapped in its own temporal delimiter. That last point is the one the
 design rests on, and it matches the unit virgl submits.
 
-**AV1 is offered only on M3-or-later hosts.** virglrs advertises an AV1 profile only when
-`VTIsHardwareDecodeSupported` says the silicon has one (`third_party/virglrs/src/videotoolbox.rs`),
-and it has no software decoder behind it: on an M1 or M2 the guest sees no AV1 profile and decodes
-with its own dav1d, unaccelerated. Exercising the VideoToolbox path end to end therefore needs an
-M3+ host; the serializer itself is testable anywhere against its offline oracles.
+**VideoToolbox decodes AV1 only on M3-or-later hosts; elsewhere virglrs's dav1d does.** A host
+with no AV1 silicon still advertises AV1 and decodes every unit with dav1d on the codec's decode
+thread (`Route::Software` in `third_party/virglrs/src/vrend/video/mod.rs`), so the host sees the
+stream either way (`third_party/virglrs/docs/design.md`). Exercising the VideoToolbox path end to
+end therefore needs an M3+ host; the serializer itself is testable anywhere against its offline
+oracles.
 
 ## Licence: the serializer is ours, and the oracle is dav1d
 
@@ -155,9 +156,9 @@ needed for decode correctness — but the protocol carries two surfaces, `target
 **decide the mapping deliberately**: fill the grain-applied picture into whichever surface the
 guest displays, and do not assume that is `target`.
 
-**Phase 4 — an L2 test.** It needs an M3+ host: with no AV1 silicon the guest is offered no AV1
-profile and decodes in its own software, so a test meant to cover VideoToolbox has to establish
-that VideoToolbox actually served it — and skip, rather than pass, where it did not.
+**Phase 4 — an L2 test.** It needs an M3+ host: without AV1 silicon the host decodes with dav1d,
+so a test meant to cover VideoToolbox has to establish that VideoToolbox served it — and skip,
+rather than pass, where it did not.
 
 ## The descriptor does not carry refresh_frame_flags, and cannot
 
@@ -299,9 +300,9 @@ list of the descriptor:
 - The same threading rule as VP9: VideoToolbox's callback is ordered-synchronous but on its
   own thread, which holds no GL context. Park the picture, deliver after `DecodeFrame` returns.
 
-## Super-resolution frames are decoded, not delivered
+## Super-resolution frames switch the codec to dav1d
 
-The one AV1 tool this backend does not deliver. VideoToolbox reconstructs
+The one AV1 tool VideoToolbox does not deliver. VideoToolbox reconstructs
 super-resolution frames correctly — frames predicting from them come back
 bit-exact — but the picture it hands out for such a frame is not that frame: it is
 a coded-width buffer holding roughly the rightmost `coded_width` columns of the
@@ -309,12 +310,15 @@ upscaled image. Neither of the two ways out survives measurement (upscaling it
 ourselves, because it is not the pre-upscale picture; requesting full-size output
 buffers, because the same wrong pixels come back stretched).
 
-So virglrs submits a frame declaring `use_superres` like any other — the reference chain depends
-on it — and withholds only its picture: the guest's target keeps what it held, and the worker log
+So at the first frame declaring `use_superres` virglrs switches the codec to dav1d for good
+(`Route::Switched`), after feeding it every unit since the last shown key frame (the switch's rules
+are below). Where dav1d cannot take over — a 10-bit stream, or a history past its cap
+(`HISTORY_BYTES`) — the frame is still submitted to VideoToolbox, since the reference chain depends
+on it, and only its picture is withheld: the guest's target keeps what it held, and the worker log
 says so for every such frame (the video protocol has no reply path to tell the guest). The decision
 keys on the stream's own flag, never on the returned width, so it does not quietly stop working if
 the host's output bug changes shape, and it travels with the frame, so a super-resolution frame the
-serializer holds at the eight-slot wall is still withheld when it goes out.
+serializer holds at the eight-slot wall is still handled when it goes out.
 
 **The host defect, measured 2026-08-30 on M4 Pro / macOS 26.5.2** (`spikes/av1-obu-serializer/vt-oracle.c`):
 the returned superres picture matches the correctly upscaled one on 76.3% of pixels 1:1 and 88.6%
@@ -328,12 +332,12 @@ ffmpeg -c:v libdav1d          -i superres.mp4 -pix_fmt gray -f image2 sw/%03d.pg
 (dav1d per-frame mean luma 127.00..127.43; VideoToolbox 110.44..142.76, low exactly on superres
 frames.)
 
-**Not ported: the dav1d fallback.** The C backend this design was first built on switched a codec
-to a dav1d software decoder on its first `use_superres` frame, and used the same decoder to offer
-AV1 on hosts with no silicon. virglrs carries neither. If it is ported, the constraints the C
-version established still hold: replay every unit since the last **shown** key frame (a decoder
-started mid-GOP or on a gapped history produces subtly wrong pictures while every header parses);
-feed it the serializer's own units so both decoders see identical bytes; ask for invisible frames
-(`output_invisible_frames`), since a hidden frame's surface is otherwise never written and
-one-picture-per-unit breaks (`spikes/av1-obu-serializer/sw-oracle.c` pins it: 6 fixtures, 60 units
-→ 60 pictures each); refuse when it cannot start (no dav1d, 10-bit, no usable history).
+**The dav1d fallback** (virglrs `ec2bfeb`, "video: decode AV1 with dav1d where the hardware
+cannot") serves both cases: the switch at a super-resolution frame, and hosts with no AV1 silicon,
+where dav1d decodes from the codec's first unit. Its rules: replay every unit since the last
+**shown** key frame (a decoder started mid-GOP or on a gapped history produces subtly wrong pictures
+while every header parses); feed it the serializer's own units so both decoders see identical
+bytes; ask for invisible frames (`output_invisible_frames`), since a hidden frame's surface is
+otherwise never written and one-picture-per-unit breaks (`spikes/av1-obu-serializer/sw-oracle.c`
+pins it: 6 fixtures, 60 units → 60 pictures each); refuse the switch when it cannot start (10-bit,
+no usable history) and withhold the picture instead.

@@ -216,7 +216,9 @@ video). `docs/research/GAPS-and-verification.md` tracks claims still needing ver
   deliberately **skips** the HVF tests (no codesign / sandbox) — green there means
   almost nothing for boot behavior, so always run the full suite before
   declaring something works. It touches `hv_vm_*`, so it runs only outside any tool sandbox
-  (`docs/claude-code.md`) and with a codesigned worker.
+  (`docs/claude-code.md`) and with a codesigned worker. The harness runs the pre-built binaries in
+  `target/debug/`, which `cargo test -p limina-test` does not rebuild: an A/B of shipped behaviour
+  must rebuild and re-codesign between arms.
   - **It takes ~38 min. THE one way to run or wait on it is `scripts/run-suite.sh`** — run
     `scripts/run-suite.sh <log>` as a *backgrounded task* (its completion IS the suite's, with
     the suite's real exit code, and it ends by printing the verdict lines), or attach to a run
