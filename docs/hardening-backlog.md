@@ -1114,33 +1114,32 @@ zink no longer hands KK list restart. The venus tier still reaches the skip or t
 the pre-graphics/batched branch `limina-kk-pregfx` (`perf/listrestart-2026-10-07/`). A GPU hang is
 host-wide: reproduce only on an otherwise idle host.
 
-### A long guest shader trips macOS's GPU watchdog (fixed on unpushed branches; pins not bumped)
+### A long guest shader trips macOS's GPU watchdog (vrend fixed; venus and the costs below open)
 piglit's `ext_timer_query@time-elapsed` doubles the loop count of a slow fragment shader until one
 draw takes 0.1 s. macOS's GPU watchdog stops fragment work like that after tens of milliseconds
 (`kIOGPUCommandBufferCallbackErrorHang`, one host GPU restart per hang). The same shader hangs bare
 Metal with no VM, and the timer query is innocent (`spikes/timer-query-hang/RESULTS.md`). Any guest
-shader in that class, such as a heavy WebGL page, reaches it the same way, on either tier. On the
-pinned stack, KK then marks the device lost, every GL context in the VM fails, the control queue
-stalls for ~20 s and the worker dies on signal 11.
+shader in that class, such as a heavy WebGL page, reaches it the same way, on either tier. Before
+the fix, KK marked the device lost, every GL context in the VM failed, the control queue stalled
+for ~20 s and the worker died on signal 11.
 
 The fix keeps the device and stops the offender:
 - **KK** moves to a new Metal queue after a hang (macOS bans the queue, not the process). It
   delivers from the CPU the signals a banned queue never fires, and it charges each hang to the
   command pool whose work ran into it.
 - **zink** resets the context that caused `ZINK_HANG_LIMIT` hangs; past `ZINK_HANG_BUDGET` for the
-  screen, it resets any context that hangs. The worker defaults these to 2 and 4.
+  screen, it resets any context that hangs, until `ZINK_HANG_FORGIVE_S` passes without one. The
+  worker defaults these to 2, 4 and zink's own 3600.
 - **vrend** creates robust contexts and refuses a reset one.
 - **zink** no longer crashes on a lost device's descriptor pools.
 
 Measured on the piglit test: 4 GPU restarts with the desktop alive and a clean poweroff, against a
 dead VM before.
 
-Where it lives: mesa fork branch `kk-gpu-hang` (`/Volumes/mesa-cs/mesa-hang`, four commits on
-`limina-kk 059715d2aa5`), virglrs branch `gpu-hang`, and limina `crates/limina-vmm/src/krun/mod.rs`.
-None of it is pushed, and the kosmickrisp and virglrs pins still name the stack without it.
+Where it lives: `limina-kk` (KK and zink, ledger section H), virglrs `49ddd13`, and the worker's
+defaults in `crates/limina-vmm/src/krun/mod.rs`.
 
 Still owed:
-- **Land it.** Push the branches, bump the pins, rebuild the host Mesa and cut a bundle.
 - **Work already queued still hangs.** A limit of N costs about N + 2 restarts, because the
   offender's queued work runs after its reset. Each hang also stalls the virtio-gpu control queue
   for the ~120 ms the watchdog takes.

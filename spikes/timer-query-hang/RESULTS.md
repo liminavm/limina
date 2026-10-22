@@ -21,9 +21,9 @@ stopped:
   hanging the GPU`).
 - zink no longer crashes on the descriptor pools a lost device cannot create, which was the signal 11.
 
-Where the fix lives: mesa fork branch `kk-gpu-hang` (KK recovery, the zink attribution and the zink
-crash fixes), virglrs branch `gpu-hang` (the vrend refusal), and the worker's defaults in
-`crates/limina-vmm/src/krun/mod.rs`.
+Where the fix lives: `limina-kk` from `96653be2f5d` to `3d7a8fe4244` (KK recovery, the zink
+attribution and the zink crash fixes), virglrs `49ddd13` (the vrend refusal), and the worker's
+defaults in `crates/limina-vmm/src/krun/mod.rs`.
 
 Measured 2026-10-22 on the M1 Max dev Mac, macOS 27.0. Stock F44 guest
 (`Fedora-Workstation-44.stock.piglit-spirv.raw` clone, Fedora Mesa, vrend over zink-on-KK), base

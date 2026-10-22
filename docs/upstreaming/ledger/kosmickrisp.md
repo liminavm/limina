@@ -1,12 +1,12 @@
 <!-- ledger-check: dep=kosmickrisp -->
 # kosmickrisp — patch-audit ledger
 
-131 commits; base `d44453ce07b` (mesa main, rebased 2026-10-14 by limina `b9be1f0`), pin
-`059715d2aa5` (`third_party/manifest.toml` [kosmickrisp]); see *Rebase executed* below.
+135 commits; base `d44453ce07b` (mesa main, rebased 2026-10-14 by limina `b9be1f0`), pin
+`3d7a8fe4244` (`third_party/manifest.toml` [kosmickrisp]); see *Rebase executed* below.
 Schema + protocol: `README.md`. The `checked` column of rows 0001–0019 records main `84acd848`
 (2026-08-03), which is two bases old (`418f2963a15` on 2026-08-05, then `d44453ce07b` on
 2026-10-14); those `need` verdicts have not been re-verified against the current base.
-94 commits have only a skeleton row (*Unaudited commits* at the end).
+98 commits have only a skeleton row (*Unaudited commits* at the end).
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
 
 **Disclosure: not gated** (user decision, 2026-10-21; `README.md`, phase 3). The `sec: yes`
@@ -345,3 +345,17 @@ covered by the combined allocator-ceiling row and has no skeleton row.
 | `219ed8db56c` | kk: keep a legacy WSI scanout image out of array texture types | `src/kosmickrisp/vulkan/kk_image_layout.c` |  | carry (limina protocol/UAPI); sec: no |
 | `2e1d2485bca` | kk/limina: sync the wire header for LMN_ERROR_RESTORE | `src/kosmickrisp/bridge/limina/limina_gpu_wire.h` |  | carry (limina protocol/UAPI); sec: no |
 | `c19fc570e80` | kk: keep a guest application's stderr quiet unless asked | `src/kosmickrisp/bridge/limina/lmn_device.c`, `src/kosmickrisp/bridge/mtl_bridge.h`, `src/kosmickrisp/bridge/mtl_bridge.m` +4 |  | carry (limina protocol/UAPI); sec: no |
+
+### H. GPU-watchdog hang recovery (`spikes/timer-query-hang/`)
+
+A shader macOS's GPU watchdog stops no longer loses the device: KK moves to a new queue and
+charges the hang to a command pool, and zink resets the context whose work hung. Upstream KK has
+neither the recovery nor `vkGetCommandPoolHangCountLIMINA`, a private entry point zink resolves by
+name; an upstream shape would be a Vulkan extension, or zink's own reset accounting.
+
+| commit | subject | files | diag | first guess (unresearched) |
+|---|---|---|---|---|
+| `96653be2f5d` | kk: report a refusal on a lost device as device loss | `src/kosmickrisp/vulkan/kk_cmd_buffer.c`, `src/kosmickrisp/vulkan/kk_queue.c` |  | upstream-now; sec: no |
+| `161be8ef694` | zink: survive the descriptor pools a lost device cannot create | `src/gallium/drivers/zink/zink_descriptors.c`, `src/gallium/drivers/zink/zink_draw.cpp` |  | upstream-after-cleanup; sec: guest-DoS |
+| `909b3baeae8` | kk: recover from a GPU-watchdog hang instead of losing the device | `src/kosmickrisp/vulkan/kk_cmd_pool.c`, `src/kosmickrisp/vulkan/kk_cmd_pool.h`, `src/kosmickrisp/vulkan/kk_device.c` +3 |  | carry (private entry point), recovery possibly upstream; sec: guest-DoS |
+| `3d7a8fe4244` | zink: reset the context whose work hung the GPU, not the device | `src/gallium/drivers/zink/zink_batch.c`, `src/gallium/drivers/zink/zink_context.c`, `src/gallium/drivers/zink/zink_screen.c` +1 |  | carry (needs the KK entry point; policy); sec: guest-DoS |
