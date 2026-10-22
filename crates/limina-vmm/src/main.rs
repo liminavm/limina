@@ -380,6 +380,13 @@ struct Cli {
     #[arg(long)]
     balloon_deflate_on_oom: bool,
 
+    /// Build guest RAM from owned memory blocks cut as `OFFSET:BLOCK[,OFFSET:BLOCK...]`, in bytes
+    /// from the start of RAM, each block size applying up to the next offset. Such RAM bills a
+    /// page both this worker and the guest touch once, and gives pages back by whole block.
+    /// Absent: an anonymous mapping.
+    #[arg(long, value_parser = parse_guest_ram_blocks)]
+    guest_ram_blocks: Option<GuestRamBlocks>,
+
     /// Attach a NIC (`eth0`) on a vmnet interface this worker starts: `shared` (NAT),
     /// `host` (host-only) or `bridged:<interface>` (the LAN, through that host interface).
     #[arg(long, conflicts_with_all = ["net_netd", "net_auto"])]
@@ -471,6 +478,26 @@ fn parse_forward(s: &str) -> Result<(SocketAddrV4, u16)> {
         .parse()
         .map_err(|e| anyhow::anyhow!("forward guest port {guest:?}: {e}"))?;
     Ok((host, guest))
+}
+
+/// A `--guest-ram-blocks` layout: `(offset, block)` spans in bytes.
+#[derive(Clone, Debug)]
+struct GuestRamBlocks(Vec<(u64, u64)>);
+
+fn parse_guest_ram_blocks(s: &str) -> Result<GuestRamBlocks> {
+    s.split(',')
+        .map(|span| {
+            let (offset, block) = span
+                .split_once(':')
+                .ok_or_else(|| anyhow::anyhow!("a span is OFFSET:BLOCK, got {span:?}"))?;
+            let number = |n: &str| {
+                n.parse::<u64>()
+                    .map_err(|e| anyhow::anyhow!("guest RAM block span {span:?}: {e}"))
+            };
+            Ok((number(offset)?, number(block)?))
+        })
+        .collect::<Result<_>>()
+        .map(GuestRamBlocks)
 }
 
 fn listen_at(path: Option<PathBuf>, link: Option<i32>) -> Option<ListenAt> {
@@ -971,6 +998,7 @@ fn main() -> Result<()> {
         moc_socket: cli.moc_fd.map(ListenAt::Link),
         free_page_reporting: cli.balloon_free_page_reporting,
         deflate_on_oom: cli.balloon_deflate_on_oom,
+        guest_ram_blocks: cli.guest_ram_blocks.map(|b| b.0),
         snapshot_file: cli.snapshot_file,
         restore_file: cli.restore,
         host_sleep_s2idle,
@@ -989,6 +1017,22 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use std::os::unix::io::AsRawFd;
+
+    #[test]
+    fn a_guest_ram_layout_parses_as_offset_block_spans() {
+        assert_eq!(
+            parse_guest_ram_blocks("0:2097152").unwrap().0,
+            vec![(0, 2 << 20)]
+        );
+        assert_eq!(
+            parse_guest_ram_blocks("0:2097152,4294967296:16384")
+                .unwrap()
+                .0,
+            vec![(0, 2 << 20), (4 << 30, 16 << 10)]
+        );
+        assert!(parse_guest_ram_blocks("0").is_err());
+        assert!(parse_guest_ram_blocks("0:2M").is_err());
+    }
 
     #[test]
     fn gpu_mem_budget_is_a_runaway_backstop_not_a_working_set_limit() {

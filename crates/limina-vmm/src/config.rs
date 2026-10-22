@@ -364,6 +364,11 @@ pub struct VmSpec {
     /// `MemTotal`, accounting stays truthful, and the supervisor's PSI policy owns the release
     /// path. Escape hatch only — for a guest whose workload provably needs the in-kernel net.
     pub deflate_on_oom: bool,
+    /// Build guest RAM from owned memory blocks (libkrun `hvf::guest_ram`), cut as `(offset,
+    /// block)` spans in bytes from the start of RAM. Such RAM bills a page the worker and the
+    /// guest both touch once, where an anonymous mapping bills it per mapping, and gives pages
+    /// back by whole block. `None` keeps the anonymous mapping. The supervisor picks the layout.
+    pub guest_ram_blocks: Option<Vec<(u64, u64)>>,
     /// Where to write the VM snapshot on a SIGUSR1 suspend trigger (M9 suspend/resume). When set,
     /// the worker installs the SIGUSR1 handler and a trigger thread; on signal it quiesces the
     /// vCPUs, serializes vCPU+GIC+RAM here, and exits [`WORKER_EXIT_SNAPSHOT`](126). `None` = no

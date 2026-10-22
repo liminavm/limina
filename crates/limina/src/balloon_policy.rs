@@ -2458,9 +2458,50 @@ mod proofs {
     }
 }
 
+/// How guest RAM made of owned memory blocks is cut (docs/design/guest-ram-objects.md), as
+/// `(offset, block)` spans in bytes from the start of RAM. Such RAM gives pages back only by
+/// whole block, and small blocks cost setup time, so the cut follows the reclaim mode:
+/// `Aggressive` keeps balloon reclaim per page by cutting the elastic range above `min_mib` into
+/// 16 KiB blocks; every other mode takes 2 MiB blocks, which free-page reporting and virtio-mem
+/// hand back whole.
+pub fn guest_ram_blocks(mode: ReclaimMode, min_mib: Option<u64>) -> Vec<(u64, u64)> {
+    const COARSE: u64 = 2 << 20;
+    const FINE: u64 = 16 << 10;
+    match (mode, min_mib) {
+        (ReclaimMode::Aggressive, Some(min)) => {
+            vec![(0, COARSE), ((min << 20).next_multiple_of(COARSE), FINE)]
+        }
+        _ => vec![(0, COARSE)],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_aggressive_reclaim_cuts_the_elastic_range_fine() {
+        const MIB: u64 = 1 << 20;
+        assert_eq!(
+            guest_ram_blocks(ReclaimMode::Aggressive, Some(4096)),
+            vec![(0, 2 * MIB), (4096 * MIB, 16 << 10)]
+        );
+        assert_eq!(
+            guest_ram_blocks(ReclaimMode::Aggressive, Some(4095)),
+            vec![(0, 2 * MIB), (4096 * MIB, 16 << 10)]
+        );
+        assert_eq!(
+            guest_ram_blocks(ReclaimMode::Aggressive, None),
+            vec![(0, 2 * MIB)]
+        );
+        for mode in [
+            ReclaimMode::Moderate,
+            ReclaimMode::Light,
+            ReclaimMode::Disabled,
+        ] {
+            assert_eq!(guest_ram_blocks(mode, Some(4096)), vec![(0, 2 * MIB)]);
+        }
+    }
 
     /// An 8 GiB VM with a 1 GiB floor, in pages: plenty of space above every allowance clamp.
     const MAX: u32 = 8 * 1024 * PAGES_PER_MIB;

@@ -164,6 +164,13 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
         crate::config::IpaGranule::SixteenK => vmm::resources::IpaGranule::SixteenK,
     });
 
+    vmr.guest_ram_blocks = spec
+        .guest_ram_blocks
+        .clone()
+        .map(vmm::resources::BlockLayout::new)
+        .transpose()
+        .map_err(|e| anyhow!("guest RAM block layout: {e}"))?;
+
     // Nested virtualization: HVF only offers EL2 on M3 and later, and asking for it elsewhere
     // fails deep in VM creation with a generic error, so check up front.
     if spec.nested_virt {
@@ -1459,6 +1466,7 @@ mod tests {
             moc_socket: None,
             free_page_reporting: false,
             deflate_on_oom: false,
+            guest_ram_blocks: None,
             snapshot_file: None,
             restore_file: None,
             host_sleep_s2idle: false,

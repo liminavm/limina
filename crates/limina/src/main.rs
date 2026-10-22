@@ -2371,6 +2371,20 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push("--balloon-free-page-reporting".into());
     }
 
+    // Guest RAM from owned memory blocks (docs/design/guest-ram-objects.md), opt-in with
+    // LIMINA_GUEST_RAM=objects until the suite is green on it.
+    if std::env::var("LIMINA_GUEST_RAM").as_deref() == Ok("objects") {
+        let min = mem_range.map(|(min, _)| min as u64);
+        let spans = balloon_policy::guest_ram_blocks(cli.reclaim, min)
+            .iter()
+            .map(|(offset, block)| format!("{offset}:{block}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        log::info!("guest RAM: owned blocks {spans}");
+        args.push("--guest-ram-blocks".into());
+        args.push(spans);
+    }
+
     // DEFLATE_ON_OOM escape hatch (see the flag doc: default off so balloon accounting stays
     // transparent and systemd-oomd doesn't fire against phantom memory use).
     if cli.balloon_deflate_on_oom {
