@@ -63,6 +63,11 @@ it non-root under `gtimeout`. `MINIGUEST_TRACE=1` prints every frame the respond
   macOS 27.0.1): lease in 0.09 s, NAT to 1.1.1.1, as with a network object.
 - **A pinned subnet is exclusive:** a second `vmnet_network_create` for a subnet a live network
   holds fails with 1001 until the first one is gone.
+- **A classic interface's pinned subnet is shared, not exclusive** (`lease shared --subnet
+  GW,END,MASK`, measured 2026-10-22 on macOS 27.0.1). Two processes starting with the same
+  `vmnet_start_address_key`/`vmnet_end_address_key`/`vmnet_subnet_mask_key` join one network: the
+  same router MAC, leases .2 and .3, NAT to 1.1.1.1 for both. A process pinning a different subnet
+  meanwhile gets a network of its own beside it, and both work.
 - **NECP drops host connects to a guest from our own binaries.** A `connect()` to the guest's
   address ends in `EHOSTUNREACH`, with `tcp drop outgoing … interface: bridge100` and `reason: NECP`
   in the unified log, and no frame reaches the bridge. That holds for `miniguest` and for a bare

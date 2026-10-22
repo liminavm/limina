@@ -1499,16 +1499,26 @@ A worker that crashes or is killed still leaves its file. Do not sweep by the em
 are recycled; a safe sweep needs proof the owner is gone (a lock the worker holds, say).
 
 ### vmnet interfaces leak until the host refuses new ones
-Measured 2026-10-22: the host carried ~250 `vmenet` interfaces, all down, and every new
-`vmnet_start_interface` failed with `VMNET_FAILURE` (1001) while InternetSharing logged
-`mis_network_add_interface failed`. Seven vmnet tests failed in the suite; the netd fallback kept
-working. `sudo killall InternetSharing` (SIP refuses a `launchctl kickstart`) cleared them all. The
-suspect is the teardown path: `Vmnet`'s `Drop` (libkrun `devices/src/virtio/net/vmnet.rs`) stops the
-interface, but a worker that exits through SYSTEM_OFF or is killed never runs it. Owed: count
-`vmenet` interfaces around a clean poweroff, a SIGKILL and a crash to find which exits leak, then
-stop the interface on every exit path the worker controls and find out what reclaims the rest. A
-second mode showed up the same day: with zero `vmenet` interfaces and InternetSharing not
-running, a VM still got `VMNET_FAILURE` and stayed on netd.
+InternetSharing's own leak, triggered when two vmnet clients claim one subnet. Measured 2026-10-22
+on macOS 27.0.1: a limina VM held a shared interface on 192.168.64.0/24, and Apple's `container`
+started a VM on its `default` network, also 192.168.64.0/24. InternetSharing logged `network …
+doesn't belong to client` and `mis_bridge_create: … already exists, deleting`, destroyed the bridge
+the limina VM was on, and reset that network to idle. From then on every vmnet interface failed to
+join the bridge (`BRDGADD: failed Device not configured`), and none was cleaned up when its process
+exited (`mis_network_cleanup_bridge: interface … does not belong to network`). They accumulated
+(~250) until `vmnet_start_interface` returned `VMNET_FAILURE` (1001) for every caller.
+`sudo killall InternetSharing` (SIP refuses a `launchctl kickstart`) clears them; a later
+`VMNET_FAILURE` with no `vmenet` interfaces left is the same wedged state.
+
+limina's own exits do not leak: macOS reclaims an interface when its process dies, however it dies
+(a 50-minute suite run, ~200 networked VMs, never held more `vmenet` interfaces than live workers).
+limina now pins vmnet shared to 192.168.223.0/24 (`SHARED_SUBNET` in `crates/limina-vmm/src/krun/mod.rs`),
+so it no longer shares a subnet with `container`. The wedge needs InternetSharing to hand out a
+subnet another client's network still claims; it did not reproduce on demand, so
+`net_vmnet_container.rs` (opt-in, `LIMINA_CONTAINER_COLLISION_TEST=1`) is a guard, not a
+reproducer. Owed: a Feedback to Apple with the log sequence above. Not limina's leak, but still
+owed in libkrun's `vmnet.rs`: a start that answers after its 10 s timeout, or that fails while
+handing back an interface, is never stopped.
 
 ### An idle guest reads virtio-net `InterruptStatus` about 2,400 times a second
 Measured 2026-08-27 on a stock F44 guest at a settled idle desktop with `--net`: 72,374 MMIO reads of

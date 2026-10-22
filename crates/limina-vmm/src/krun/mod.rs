@@ -27,7 +27,7 @@ use devices::display::{DisplayInfo, DisplayInfoEdid, EdidIdentity, EdidParams};
 use devices::virtio::block::{DiskFormat, SyncMode};
 use devices::virtio::gpu::timing::TimingPage;
 use devices::virtio::net::backend::ExternalBackend;
-use devices::virtio::net::vmnet::{Vmnet, VmnetConfig, VmnetMode as KrunVmnetMode};
+use devices::virtio::net::vmnet::{Vmnet, VmnetConfig, VmnetMode as KrunVmnetMode, VmnetSubnet};
 use devices::virtio::{BalloonControlHandle, DisplayResizeHandle, MemControlHandle};
 use krun_lib::api::device_builders::{
     BalloonDevice, BlockDevice, DisplayBackend, FsDevice, GpuDevice, I2cBatteryDevice, InputDevice,
@@ -48,6 +48,18 @@ use self::display_update::{display_update_from, timing_grid_from};
 use crate::config::{
     BootSource, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec, NetBackend,
     NetSpec, VmSpec, VmnetMode, VsockSpec,
+};
+
+/// The subnet every limina VM on vmnet shared asks for, so they share one network. Left to itself,
+/// vmnet shared mode takes 192.168.64.0/24, which Apple's `container` also claims for its default
+/// network; when InternetSharing sees the two claim one subnet it deletes the bridge a running VM is
+/// on, and every interface attached afterwards fails and is never cleaned up. Also clear of
+/// limina-netd's 192.168.127.0/24, vmnet host-only's 192.168.128.0/24, and Lima's and Colima's
+/// 192.168.105 and .106.
+const SHARED_SUBNET: VmnetSubnet = VmnetSubnet {
+    gateway: std::net::Ipv4Addr::new(192, 168, 223, 1),
+    dhcp_end: std::net::Ipv4Addr::new(192, 168, 223, 254),
+    mask: std::net::Ipv4Addr::new(255, 255, 255, 0),
 };
 
 /// Standard libkrun guest CID.
@@ -737,6 +749,7 @@ fn net_device(net: &NetSpec) -> Result<NetDevice> {
                     VmnetMode::Bridged(ifname) => Some(ifname.clone()),
                     _ => None,
                 },
+                subnet: matches!(mode, VmnetMode::Shared).then_some(SHARED_SUBNET),
             };
             serve(None, None)?;
             let build: ExternalBackend = Arc::new(move |features| {
@@ -776,6 +789,7 @@ fn net_device(net: &NetSpec) -> Result<NetDevice> {
             let control = switch::SwitchControl::new(VmnetConfig {
                 mode: KrunVmnetMode::Shared,
                 bridged_interface: None,
+                subnet: Some(SHARED_SUBNET),
             })
             .context("starting the network switch")?;
             serve(Some(forwards.clone()), Some(control.clone()))?;

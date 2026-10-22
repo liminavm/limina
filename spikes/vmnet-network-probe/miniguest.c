@@ -3,7 +3,7 @@
 // probe.c proved that each mode starts and that one frame moves. This plays the guest's network
 // stack by hand, raw frames over vmnet_read/vmnet_write, to check what a VM would actually get:
 //
-//   lease <shared|host|bridged> [ifname] [--vhdr]
+//   lease <shared|host|bridged> [ifname] [--vhdr] [--subnet GW,END,MASK]
 //       DHCP DISCOVER/REQUEST -> lease (address, router, DNS, MTU); ARP the router; ICMP echo to
 //       the router and, outside host mode, to 1.1.1.1 through it. --vhdr starts the interface with
 //       vmnet_enable_virtio_header_key and reports the 12-byte header it sees on every frame.
@@ -76,8 +76,16 @@ static void mac_str(const uint8_t *m, char *out) {
 
 // ---- vmnet start / io ----------------------------------------------------------------------
 
+// --subnet GW,END,MASK: pin a classic interface's subnet (vmnet_start_address_key and friends).
+static const char *pin_gw, *pin_end, *pin_mask;
+
 static int start(nic *n, vmnet_network_ref net, uint64_t mode, const char *bridge, int own_mac) {
     xpc_object_t desc = xpc_dictionary_create(NULL, NULL, 0);
+    if (pin_gw) {
+        xpc_dictionary_set_string(desc, vmnet_start_address_key, pin_gw);
+        xpc_dictionary_set_string(desc, vmnet_end_address_key, pin_end);
+        xpc_dictionary_set_string(desc, vmnet_subnet_mask_key, pin_mask);
+    }
     if (own_mac) xpc_dictionary_set_bool(desc, vmnet_allocate_mac_address_key, false);
     if (n->vhdr) xpc_dictionary_set_bool(desc, vmnet_enable_virtio_header_key, true);
     if (n->vhdr) xpc_dictionary_set_bool(desc, vmnet_enable_tso_key, true);
@@ -869,6 +877,11 @@ int main(int argc, char **argv) {
             if (!strcmp(argv[i], "--vhdr")) vhdr = 1;
             else if (!strcmp(argv[i], "--own-mac")) own_mac = 1;
             else if (!strcmp(argv[i], "--hold") && i + 1 < argc) hold = atoi(argv[++i]);
+            else if (!strcmp(argv[i], "--subnet") && i + 1 < argc) {
+                pin_gw = strtok(argv[++i], ",");
+                pin_end = strtok(NULL, ",");
+                pin_mask = strtok(NULL, ",");
+            }
             else ifname = argv[i];
         }
         return lease(argv[2], ifname, vhdr, hold, own_mac);
