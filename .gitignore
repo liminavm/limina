@@ -138,3 +138,9 @@ reference/
 
 # spikes/mt-raw-capture build artifact (source + RESULTS.md are kept)
 spikes/mt-raw-capture/mtprobe
+
+# spikes/guest-ram-objects build artifacts
+spikes/guest-ram-objects/probe
+spikes/guest-ram-objects/probe.dSYM/
+spikes/guest-ram-objects/payload.o
+spikes/guest-ram-objects/payload.bin

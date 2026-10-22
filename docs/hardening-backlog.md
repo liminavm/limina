@@ -1506,7 +1506,9 @@ working. `sudo killall InternetSharing` (SIP refuses a `launchctl kickstart`) cl
 suspect is the teardown path: `Vmnet`'s `Drop` (libkrun `devices/src/virtio/net/vmnet.rs`) stops the
 interface, but a worker that exits through SYSTEM_OFF or is killed never runs it. Owed: count
 `vmenet` interfaces around a clean poweroff, a SIGKILL and a crash to find which exits leak, then
-stop the interface on every exit path the worker controls and find out what reclaims the rest.
+stop the interface on every exit path the worker controls and find out what reclaims the rest. A
+second mode showed up the same day: with zero `vmenet` interfaces and InternetSharing not
+running, a VM still got `VMNET_FAILURE` and stayed on netd.
 
 ### An idle guest reads virtio-net `InterruptStatus` about 2,400 times a second
 Measured 2026-08-27 on a stock F44 guest at a settled idle desktop with `--net`: 72,374 MMIO reads of
