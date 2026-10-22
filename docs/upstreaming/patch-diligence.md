@@ -187,9 +187,13 @@ a teardown order. Say so in the fix MR; the standalone reproducer stays the evid
   `VK_EXT_multisampled_render_to_single_sampled`: on anv and nvk, which lack it, not on lavapipe,
   radv or turnip, which have it (lavapipe skips the test). When no CI job can fail it, the MR says
   so.
-- **Say whether the failure needs asserts.** Mesa CI builds `debugoptimized`, which keeps them
-  (`b_ndebug=if-release`). A release build can show another symptom or none, and the MR should
-  give both.
+- **Make it fail on a release build too.** Mesa CI builds `debugoptimized`, which keeps asserts
+  (`b_ndebug=if-release`), but a test that fails only on an assert proves nothing on a release
+  build, and the maintainer asks. Find what the bug breaks with asserts off (a backtrace at the
+  assert names the operation that goes wrong), then a scene where the spec defines the result of
+  that operation, and check that. The MSRTT bug drops a blit into a stale buffer that already
+  held the blit's result; writing the texture through another framebuffer first made the stale
+  buffer visible. Run the test on release and debug builds, with and without the fix.
 - **Check only what the spec defines.** A multisampled depth texture's contents are discarded,
   so the MSRTT test checks the cleared quadrant and not the depth elsewhere, which the reproducer
   had relied on.

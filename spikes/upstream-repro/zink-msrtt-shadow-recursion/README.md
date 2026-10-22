@@ -150,17 +150,27 @@ framebuffer never needs a replicate blit.
 ## Suite test
 
 The `zs` mode as a piglit test (`docs/upstreaming/patch-diligence.md` §7):
-`ext_multisampled_render_to_texture2-depth-texture-partial-clear`, branch
-`msrtt2-depth-partial-clear` on `gitlab.freedesktop.org/kov/piglit` (`44714bf80`, on piglit
-`cff83ebb6`). It checks only the cleared quadrant, since the spec discards a multisampled depth
-texture's contents. 2026-10-21, zink on venus in the rig guest, debug builds, `-auto -fbo`:
+`ext_multisampled_render_to_texture2-depth-texture-partial-clear`, mesa/piglit!1262, branch
+`msrtt2-depth-partial-clear` on `gitlab.freedesktop.org/kov/piglit` (`ecb0bd8a5`, on piglit
+`53e7fe9f7`).
+
+The draw main records outside a renderpass is the replicate blit of the color attachment into its
+transient (`zink_render_attachment_shadow`, mask 1). On a release build anv still runs it without
+a visible fault, and the stale transient already holds what the blit would copy, so a scene that
+only draws to the framebuffer shows nothing. The test therefore draws red into the color texture
+through a second framebuffer before coming back, draws green over the cleared quadrant only, and
+checks the rest is red: EXT_multisampled_render_to_texture issue 7 says an attachment always sees
+the latest change to its texture. It checks no depth outside the quadrant, since EXT_msrtt2
+discards a multisampled depth texture.
+
+2026-10-22, zink on venus (host anv, Iris Plus G7) in the rig guest, `-auto -fbo`, 5 runs each:
 
 | Mesa | result |
 |---|---|
-| `main` `99476694236` | abort on `validate_atoms`, 3/3 |
-| `main` `7d6e9088821` | abort, 3/3 |
-| `99476694236` + 0001 alone (the !45485 commit) | pass, 5/5 |
-| `7d6e9088821` + all four | pass, 3/3 |
+| `main` `99476694236`, debug | abort on `validate_atoms` |
+| `main` `99476694236`, release | fail: blue where red is expected |
+| `99476694236` + 0001 alone (the !45485 commit), debug | pass |
+| `99476694236` + 0001 alone, release | pass |
 
 On lavapipe the test skips: lavapipe has `VK_EXT_multisampled_render_to_single_sampled`, and zink
 on it exposes no `GL_EXT_multisampled_render_to_texture2`. Of Mesa's zink CI drivers anv and nvk
