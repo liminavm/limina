@@ -42,6 +42,21 @@
 #
 # Usage (in guest):  sudo /path/to/install-enhanced.sh [PAYLOAD_DIR]
 #   PAYLOAD_DIR defaults to the script's own directory (the mounted share).
+
+# The Vulkan driver list step 5 pins: the vendor GPU drivers' ICDs, which
+# guest/gpu-drivers/install.sh links into /etc/vulkan/icd.d as limina-*.json and adds to this
+# pin, ahead of venus as it puts them. Rewriting the pin with venus alone would hide them.
+vk_driver_files() {  # <venus icd or ""> [<icd dir>]
+  local list="" f
+  for f in "${2:-/etc/vulkan/icd.d}"/limina-*.json; do
+    [ -e "$f" ] && list+="$f:"
+  done
+  list+="$1"
+  echo "${list%:}"
+}
+# Sourced (scripts/tests/install-enhanced-vk-drivers.sh), it stops at the helpers above.
+[[ "${BASH_SOURCE[0]}" != "$0" ]] && return 0
+
 set -euo pipefail
 PAYLOAD="${1:-$(cd "$(dirname "$0")" && pwd)}"
 echo "== limina enhanced-tier installer (payload: $PAYLOAD) =="
@@ -520,7 +535,8 @@ mkdir -p /etc/environment.d
   echo "# limina enhanced tier: GL through virgl (vrend), Vulkan through venus."
   echo "GALLIUM_DRIVER=virgl"
   echo "MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu"
-  [ -n "$VENUS_ICD" ] && echo "VK_DRIVER_FILES=$VENUS_ICD"
+  VK_FILES=$(vk_driver_files "$VENUS_ICD")
+  [ -n "$VK_FILES" ] && echo "VK_DRIVER_FILES=$VK_FILES"
   # Let clients see the host GPU-memory budget. venus advertises VK_EXT_memory_budget only
   # under this flag (`.EXT_memory_budget = VN_DEBUG(MEM_BUDGET)`), which upstream gates
   # because the host's answer is a plain passthrough of the GPU's own heap and therefore
