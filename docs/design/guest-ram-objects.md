@@ -62,10 +62,20 @@ compressor slots (`vm_object.c:1485ff`), and owned objects are disowned on reap 
 (`vm_object.c:1497-1517`, `task.c:2192`).
 
 **The design.**
-- Guest RAM is a reservation filled with tagged blocks. The block size is a measured choice (§4.3):
-  2 MiB matches virtio-mem and free page reporting on a 4 KiB guest; 16 KiB matches what a stock
-  guest's balloon inflates release. A mixed layout is possible: base RAM in large blocks, the
-  elastic range in small ones.
+- Guest RAM is a reservation filled with tagged blocks, and the release unit is the whole block. A
+  stock 4 KiB guest's balloon gives back scattered pages, so a large block frees nothing until all
+  of it is back; small blocks keep per-page reclaim and cost more (§4.1: 16 KiB blocks take 3.2 s
+  to allocate and 491 ms to map at 24 GiB, against 39 ms and 3.5 ms for 2 MiB). The layout follows
+  the VM's reclaim mode, chosen when RAM is built, so a mode changed at runtime takes its layout at
+  the next boot:
+  - `aggressive`: 2 MiB blocks for the VM's minimum, 16 KiB blocks for the elastic `min..max`
+    range, so balloon reclaim stays per page on every guest.
+  - `moderate` (the default): 2 MiB blocks everywhere. Reclaim comes from whole blocks, which
+    virtio-mem and free page reporting hand back aligned; a balloon on a stock guest frees less.
+  - `light`: either retired, or a gentler virtio-mem setting; decided with direction B.
+  - `disabled`: 2 MiB blocks, no reclaim.
+  Mechanism in libkrun takes the layout as a list of ranges and block sizes; the mapping from mode
+  to layout is limina's.
 - A release is `hv_vm_unmap` of the block, then overwriting it with a fresh tagged entry. The block
   is mapped again on the next stage-2 fault, as today's heal does, or eagerly.
 - The address range stays linear, so `GuestMemoryMmap`, virtio queues and snapshots are unchanged.
