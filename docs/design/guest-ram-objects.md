@@ -152,6 +152,15 @@ Run on an idle host (no other VM, no suite). Each experiment names its oracle an
    pinned workload; repeat on the enhanced kernel with movable onlining.
    *Blocker for B:* the stock guest cannot use the device at all. A low stock unplug rate is not a
    blocker (the balloon stays as the stock fallback); it shapes the policy.
+   *Measured 2026-10-22* (`tests/virtio_mem.rs`, stock F44 guest, 4 GiB RAM, a 2 GiB region at
+   `0x140000000`): no blocker. `virtio_mem` autoloads on virtio-mmio, plugs the 1 GiB asked in
+   2 MiB sub-blocks within 128 MiB memory blocks, and onlines it into `ZONE_NORMAL`
+   (`auto_online_blocks` is `online`); MemTotal grows by 1024 MiB. Used and freed, then asked
+   back, 1022 MiB unplugs and the worker's footprint falls 1011 MiB. With 200k tmpfs inodes held
+   (280 MB of unreclaimable slab) 4 MiB stays plugged in `ZONE_NORMAL` and none in `ZONE_MOVABLE`
+   (`online_movable` written to `auto_online_blocks` on the same stock kernel). The inodes are a
+   light load: most of the slab can land outside the plugged range, so the stock rate under a
+   load that fills the plugged blocks with kernel objects is not measured.
 
 ## 5. Implementation order
 

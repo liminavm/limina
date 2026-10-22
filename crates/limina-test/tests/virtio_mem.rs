@@ -158,3 +158,95 @@ fn a_stock_guest_plugs_and_unplugs_virtio_mem() {
         .shutdown(Duration::from_secs(15))
         .expect("shutting down the guest");
 }
+
+/// Plug 1 GiB with the guest onlining hot-added memory as `online` says (`online` puts it in
+/// `ZONE_NORMAL`, `online_movable` in `ZONE_MOVABLE`), fill the guest's other memory so new kernel
+/// objects must land in the plugged blocks, create 200k tmpfs inodes and keep them, then ask for
+/// none. Returns how much the guest plugged and how much it could not unplug.
+fn unplug_under_kernel_objects(name: &str, online: &str) -> Option<(u64, u64)> {
+    if !limina_test::require_hvf_or_skip(name) {
+        return None;
+    }
+    let cfg = match GuestConfig::baseline_fedora_from_env() {
+        Ok(mut cfg) => {
+            cfg.ram_mib = 4096;
+            cfg.with_net()
+                .with_balloon_control()
+                .with_env("LIMINA_VIRTIO_MEM", &REGION_MIB.to_string())
+        }
+        Err(e) => {
+            eprintln!("SKIPPED {name}: {e}");
+            return None;
+        }
+    };
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    guest
+        .wait_for_ssh(Duration::from_secs(300))
+        .expect("guest sshd never became reachable through the forward");
+    guest
+        .ssh_exec(&format!(
+            "echo {online} | sudo tee /sys/devices/system/memory/auto_online_blocks"
+        ))
+        .expect("setting the guest's onlining policy");
+
+    guest
+        .set_mem_target(PLUG)
+        .expect("asking the guest to plug");
+    let plugged = wait_for(&guest, Duration::from_secs(60), |s| s.mem_plugged >= PLUG);
+    let load = guest
+        .ssh_exec(
+            r#"sudo sh -c '
+              avail=$(awk "/^MemAvailable:/ {print int(\$2 / 1024)}" /proc/meminfo)
+              dd if=/dev/zero of=/dev/shm/fill bs=1M count=$((avail - 1024)) 2>/dev/null
+              mkdir /dev/shm/inodes && cd /dev/shm/inodes && seq 200000 | xargs touch
+              rm /dev/shm/fill
+              grep -E "^(Slab|SUnreclaim):" /proc/meminfo
+              grep -E "^Node 0, zone|^ +present" /proc/zoneinfo'"#,
+        )
+        .unwrap_or_else(|e| format!("(load failed: {e})"));
+
+    guest.set_mem_target(0).expect("asking the guest to unplug");
+    let left = wait_for(&guest, Duration::from_secs(60), |s| s.mem_plugged == 0).mem_plugged;
+    eprintln!(
+        "{online}: plugged {} MiB; with 200k inodes held, {} MiB would not unplug\n{load}",
+        mib(plugged.mem_plugged),
+        mib(left)
+    );
+    assert!(
+        plugged.mem_plugged >= PLUG,
+        "the guest plugged {} MiB of the {} MiB asked",
+        mib(plugged.mem_plugged),
+        mib(PLUG)
+    );
+    guest
+        .shutdown(Duration::from_secs(15))
+        .expect("shutting down the guest");
+    Some((plugged.mem_plugged, left))
+}
+
+/// A stock guest's own policy: kernel objects may land in plugged memory and pin it. Measured,
+/// not asserted; the balloon stays the stock tier's fallback for what will not unplug.
+#[test]
+fn kernel_objects_in_normal_onlined_blocks_hold_them() {
+    unplug_under_kernel_objects(
+        "kernel_objects_in_normal_onlined_blocks_hold_them",
+        "online",
+    );
+}
+
+/// Movable onlining keeps kernel objects out of plugged memory, so all of it unplugs.
+#[test]
+fn movable_onlined_blocks_unplug_whole_under_kernel_objects() {
+    let Some((_, left)) = unplug_under_kernel_objects(
+        "movable_onlined_blocks_unplug_whole_under_kernel_objects",
+        "online_movable",
+    ) else {
+        return;
+    };
+    assert_eq!(
+        left,
+        0,
+        "{} MiB of movable-onlined memory would not unplug",
+        mib(left)
+    );
+}
