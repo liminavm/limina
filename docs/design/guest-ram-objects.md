@@ -134,7 +134,8 @@ Run on an idle host (no other VM, no suite). Each experiment names its oracle an
    *Measured* (`spikes/guest-ram-objects/RESULTS.md`): no blocker. Every owned-object leg bills 1x
    through stage-2, REUSABLE does nothing, and a replaced block frees its resident pages at once and
    reads as zeros; one `hv_vm_map` spans any number of blocks. 16 KiB blocks cost 30–60x what
-   2 MiB blocks do, so blocks are 2 MiB. Still owed: a clean compressed leg on an idle host.
+   2 MiB blocks do, so blocks are 2 MiB. On an idle host, a replaced block's compressed pages leave
+the host compressor at once (772 MB of 777 MB), as anonymous memory's do under REUSABLE.
 2. **Who holds orphaned memory.** Exit {clean, SIGKILL, SIGABRT} × {venus, GPU off} × {GPU host alive,
    killed} × {supervisor alive, killed}. Oracles: `vm_stat` compressor pages and `vm.swapusage`
    before and after; `zprint` for VM objects, compressor pagers and map entries;

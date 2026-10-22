@@ -272,7 +272,13 @@ static void compress_h(void) {
     while (n < 40 && resident_pages(h, RANGE_SIZE) >= total / 4) {
         uint8_t *c = mmap(NULL, chunk, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
         if (c == MAP_FAILED) break;
-        for (uint64_t off = 0; off < chunk; off += PAGE_16K) c[off] = (uint8_t)(off >> 14) | 1;
+        /* Incompressible, or the compressor absorbs the ballast and pressure never builds. H is
+         * older than every ballast page, so it is compressed first. */
+        uint64_t x = 0x9e3779b97f4a7c15ULL ^ (uint64_t)n;
+        for (uint64_t *w = (uint64_t *)c, *e = (uint64_t *)(c + chunk); w < e; w++) {
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            *w = x;
+        }
         chunks[n++] = c;
     }
     printf("ballast: %d GiB pushed; H resident %llu/%llu pages\n", n,

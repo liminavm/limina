@@ -1,8 +1,8 @@
 # guest-ram-objects: guest RAM as owned, ledger-tagged memory objects
 
-**Date**: 2026-10-22. Host: M1 Max, 32 GB, 16 KiB pages, Darwin 27.0.0. Two other VMs were running
-(a 12 GiB build VM and a 4 GiB test VM), so the host-wide compressor column is noisy; the per-task
-columns are not affected.
+**Date**: 2026-10-22. Host: M1 Max, 32 GB, 16 KiB pages, Darwin 27.0.0. The resident legs ran with
+two other VMs up (a 12 GiB build VM and a 4 GiB test VM), which leaves the per-task columns
+unaffected; the compressed legs ran with no other VM on the host.
 **Question** (`docs/design/guest-ram-objects.md` §4.1): does guest RAM made of owned,
 ledger-tagged memory objects bill a page once when both the worker and the guest touch it, and does
 replacing an object free its resident and compressed pages?
@@ -54,14 +54,21 @@ Run: `./build.sh`, then `./probe <leg> [compressed]`, sandbox off.
 2 MiB blocks cost a 24 GiB VM 43 ms at boot; 16 KiB blocks cost 3.7 s and a quarter second per
 released GiB.
 
-**Compressed cell, partial.** `MADV_PAGEOUT` is refused from userspace (`ENOTSUP`), and 40 GiB of
-ballast compressed only ~150 MB of H: the kernel compressed the other VMs' idle memory first. On
-that sample (tagged:2048) the release dropped the task's compressed share from 149.6 M to 1.3 M at
-once. The host-wide compressor fell by 74 M, which the other VMs' traffic makes unreadable. Owed: the
-same leg on an idle host, or with H made older than everything else, before retiring REUSABLE.
+**Compressed** (`./probe <leg> compressed`, no other VM running): `MADV_PAGEOUT` is refused from
+userspace (`ENOTSUP`), so the probe pushes H out with incompressible ballast; H is older than every
+ballast page and is compressed first. A compressible ballast never builds pressure: the compressor
+absorbs it.
+
+| leg | ballast | H compressed (task view, both mappings) | release: task compressed | release: host compressor |
+|---|---|---|---|---|
+| tagged:2048 | 25 GiB | 1553.7 M | → 1.2 M at once | −772.5 M, stays down |
+| anon | 33 GiB | 1633.8 M | → 1.2 M at once | −816.4 M, stays down |
+
+The task view counts a compressed page once per mapping, so 1553.7 M is about 777 M of H in the
+compressor; the host-wide fall is all of it. Replacing an owned block frees its compressed pages at
+once, as REUSABLE does for anonymous memory.
 
 ## Verdict
 
-No blocker for direction A: owned objects bill once, release by replacement frees resident pages
-immediately, and 2 MiB is the block size. The compressed-page half is consistent but not yet
-measured cleanly.
+No blocker for direction A: owned objects bill once, release by replacement frees resident and
+compressed pages immediately, and 2 MiB is the block size.
