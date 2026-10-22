@@ -1,0 +1,57 @@
+--- /Users/kov/Projects/piglit/tests/spec/ext_timer_query/time-elapsed.c	2026-10-21 11:09:23
++++ time-elapsed.c	2026-10-22 11:30:24
+@@ -79,6 +79,8 @@
+ } test = TIME_ELAPSED;
+ 
+ GLuint prog;
++/* limina spike: TQH_NOQ=1 runs the same timing loop with no query at all. */
++static bool noq;
+ GLint iters_loc;
+ 
+ static float
+@@ -91,13 +93,15 @@
+ 
+ 	start_time = piglit_time_get_nano();
+ 
+-	if (test == TIMESTAMP) {
++	if (noq) {
++	} else if (test == TIMESTAMP) {
+ 		glQueryCounter(q[0], GL_TIMESTAMP);
+ 	} else {
+ 		glBeginQuery(GL_TIME_ELAPSED, q[0]);
+ 	}
+ 	piglit_draw_rect(-1, -1, 2, 2);
+-	if (test == TIMESTAMP) {
++	if (noq) {
++	} else if (test == TIMESTAMP) {
+ 		glQueryCounter(q[1], GL_TIMESTAMP);
+ 	} else {
+ 		glEndQuery(GL_TIME_ELAPSED);
+@@ -109,6 +113,8 @@
+ 	glFinish();
+ 
+ 	end_time = piglit_time_get_nano();
++	fprintf(stderr, "[TQH] iters=%d cpu=%.6f s\n", iters,
++		(end_time - start_time) / 1e9);
+ 
+ 	return (end_time - start_time)/ 1000.0 / 1000.0 / 1000.0;
+ }
+@@ -118,6 +124,9 @@
+ {
+ 	GLint64EXT elapsed;
+ 
++	if (noq)
++		return 0.0;
++
+ 	if (test == TIMESTAMP) {
+ 		GLint64 start, end;
+ 		glGetQueryObjecti64vEXT(q[0], GL_QUERY_RESULT, &start);
+@@ -288,6 +297,8 @@
+ piglit_init(int argc, char **argv)
+ {
+ 	piglit_require_gl_version(20);
++	noq = getenv("TQH_NOQ") != NULL;
++	setvbuf(stderr, NULL, _IONBF, 0);
+ 
+ 	piglit_require_extension("GL_EXT_timer_query");
+ 
