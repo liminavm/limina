@@ -14,6 +14,14 @@
 //! and a commanded target the driver can't fill decays back to `actual` instead of standing as a
 //! permanent 5 Hz retry loop ([`gap_action`]).
 //!
+//! **Sensors.** Reports come from `limina-agent` on the enhanced tier, and from the host reading
+//! the same `/proc` files through the stock `qemu-guest-agent` on the stock tier
+//! (`control::Inner::qga_mem_tick`). An SELinux-Enforcing Fedora guest does not let that agent
+//! read PSI, so a stock Fedora report carries PSI as 0, which reads as calm: the acute release
+//! and the `NotCalm` inflation gate are then blind, and what guards the guest is the allowance
+//! (`MemAvailable`), the `MemFree` pacing clamp, starvation, and the refault rate
+//! ([`REFAULT_HIGH_KIB_S`]), which both gives back and holds inflation.
+//!
 //! Besides the reactive target loop, the policy runs a **pressure-triggered scrub**
 //! (`spikes/balloon-retention-testbed/`): one inflate → hold → deflate cycle. Inflating routes
 //! guest-freed pages through the release path (unmap), which settles the *retention pool* —
@@ -546,6 +554,8 @@ struct State {
     gap: Option<GapTrack>,
     /// The fill the last gap decay stopped at, while it stands (see [`gap_ceiling_action`]).
     gap_ceiling: Option<GapCeiling>,
+    /// The guest's file refault counter over the last [`REFAULT_WINDOW`] — see [`RefaultRate`].
+    refaults: RefaultRate,
     /// Armed after each sent inflation step: judged by [`elasticity_action`] once the fill
     /// progresses. Cleared by any deflate, decay, or scrub (a stale probe must never judge).
     elastic_probe: Option<ElasticityProbe>,
@@ -808,6 +818,7 @@ impl BalloonPolicy {
                 free_settled_since: None,
                 gap: None,
                 gap_ceiling: None,
+                refaults: RefaultRate::default(),
                 elastic_probe: None,
                 inelastic: None,
                 host_debounce: HostDebounce::new(),
@@ -1056,7 +1067,13 @@ impl BalloonPolicy {
         // 21 give-backs in one minute on the dogfood VM (2026-08-13, 19:01), balloon oscillating
         // 1.33<->1.58 G on a 4 s period with 15.6 GiB free and io_full at 23-32%. A guest in io
         // pain is not one to take memory from, whatever MemFree claims.
-        let headroom = if p.mem_free_kib == 0 || acute || p.io_full_avg10 > IO_PRESSURE_LOW {
+        // Refault thrash is the same io pain read more precisely, and resets it the same way.
+        let refault_kib_s = st.refaults.observe(now, p.refault_file, p.page_kib);
+        let headroom = if p.mem_free_kib == 0
+            || acute
+            || p.io_full_avg10 > IO_PRESSURE_LOW
+            || refaulting(refault_kib_s)
+        {
             0
         } else {
             let free_pages = (p.mem_free_kib / 4).min(u32::MAX as u64) as u32;
@@ -1092,6 +1109,7 @@ impl BalloonPolicy {
             giveback_streak: st.giveback_streak,
             free_settled_for,
             shortfall_damped: sf.damped,
+            refault_kib_s,
             now,
         };
         let mut decision = decide(p, &inputs);
@@ -1124,10 +1142,11 @@ impl BalloonPolicy {
                     st.cooldown_until = Some(st.cooldown_until.map_or(until, |t| t.max(until)));
                     log::info!(
                         "autoballoon: pressure give-back — guest sustainedly hurting behind \
-                         the balloon (io_full_avg10={}, some_avg60={}), target -> {new_target} \
-                         pages",
+                         the balloon (io_full_avg10={}, some_avg60={}, refaults {} KiB/s), \
+                         target -> {new_target} pages",
                         p.io_full_avg10,
-                        p.some_avg60
+                        p.some_avg60,
+                        refault_kib_s.map_or("?".to_string(), |r| r.to_string())
                     );
                 }
                 // Arm the elasticity probe on inflations sent from the low-free chase regime
@@ -1935,7 +1954,7 @@ fn trace_decision(
             "\"released_bytes\":{},\"remapped_bytes\":{},\"stray_faults\":{},",
             "\"sweeps\":{},\"sweep_debited_bytes\":{},\"sweep_ms\":{},",
             "\"sweep_faults\":{},\"compressed_bytes\":{},\"footprint_bytes\":{},",
-            "\"free_settled_ms\":{}}}\n"
+            "\"free_settled_ms\":{},\"refault_kib_s\":{}}}\n"
         ),
         ts_ms,
         i.mode,
@@ -1970,6 +1989,8 @@ fn trace_decision(
         json_stat(wstats.map(|w| w.footprint_bytes)),
         i.free_settled_for
             .map_or("null".to_string(), |d| d.as_millis().to_string()),
+        i.refault_kib_s
+            .map_or("null".to_string(), |r| r.to_string()),
     );
     if f.write_all(line.as_bytes()).is_err() {
         st.trace = None;
@@ -2007,7 +2028,63 @@ struct DecideInputs {
     /// this reading yet (see [`shortfall_action`]). Affects ONLY the shortfall term — every
     /// other release path is untouched.
     shortfall_damped: bool,
+    /// How fast the guest is reading evicted page cache back, in KiB/s over [`REFAULT_WINDOW`]
+    /// — `None` until a window's worth of reports, or from a guest that does not report it.
+    refault_kib_s: Option<u32>,
     now: Instant,
+}
+
+/// Refault rate (KiB/s) at which the guest counts as thrashing its page cache: re-reading what
+/// it just lost, faster than any reader of new data refaults. Measured 2026-10-23 on the F44
+/// enhanced image at 2..8 GiB (`balloon_stress`, 10 s windows): an idle desktop peaked at
+/// 0.5 MiB/s, a 10 GiB one-pass read at 0.7 MiB/s, and a 2 GiB re-read squeezed by the
+/// balloon or the virtio-mem split at 1.7 and 2.8 GiB/s. This sits two orders of magnitude
+/// above the quiet shapes and more than one below the thrash.
+const REFAULT_HIGH_KIB_S: u32 = 64 * 1024;
+
+/// The span a refault rate is measured over: PSI's `avg10` horizon, so the two triggers it sits
+/// beside judge the same stretch of the guest's life.
+const REFAULT_WINDOW: Duration = Duration::from_secs(10);
+
+/// The guest's `workingset_refault_file` counter, turned into a rate.
+///
+/// The counter is cumulative and in guest pages, so it means nothing alone: a 16 KiB guest
+/// refaults a quarter of the pages a 4 KiB one does for the same bytes, and reports arrive at
+/// the sensor's cadence (1 s from `limina-agent`, 2 s over the stock guest agent). The rate is
+/// therefore in KiB/s and taken over a fixed wall-clock window, so one threshold serves both
+/// tiers.
+#[derive(Debug, Default)]
+struct RefaultRate {
+    /// `(when, counter in KiB)`, oldest first, spanning a little over one window.
+    samples: std::collections::VecDeque<(Instant, u64)>,
+}
+
+impl RefaultRate {
+    /// Record one report's counter; the rate over the last [`REFAULT_WINDOW`], once there is a
+    /// window to measure. A counter that goes backwards is a new boot: start over. A report
+    /// without the counter (an agent predating it, or a guest whose vmstat was unreadable)
+    /// clears the history rather than bridging a gap nobody measured.
+    fn observe(&mut self, now: Instant, counter: u64, page_kib: u32) -> Option<u32> {
+        if page_kib == 0 {
+            self.samples.clear();
+            return None;
+        }
+        let kib = counter.saturating_mul(page_kib as u64);
+        if self.samples.back().is_some_and(|&(_, last)| kib < last) {
+            self.samples.clear();
+        }
+        self.samples.push_back((now, kib));
+        // Keep the newest sample at least a window old, and nothing older than it.
+        while self.samples.len() > 2 && now.duration_since(self.samples[1].0) >= REFAULT_WINDOW {
+            self.samples.pop_front();
+        }
+        let &(then, base) = self.samples.front()?;
+        let span = now.duration_since(then);
+        if span < REFAULT_WINDOW {
+            return None;
+        }
+        Some(((kib - base) as f64 / span.as_secs_f64()).min(u32::MAX as f64) as u32)
+    }
 }
 
 /// Whether a settled free list has earned its way past the post-release cooldown (pure).
@@ -2130,6 +2207,11 @@ fn io_pain_can_be_ours(mem_free_kib: u64, mem_available_kib: u64, mem_total_kib:
     free_says_short && avail_says_short
 }
 
+/// Is the guest re-reading evicted page cache fast enough to be thrashing (pure)? Unknown is no.
+fn refaulting(refault_kib_s: Option<u32>) -> bool {
+    refault_kib_s.is_some_and(|r| r >= REFAULT_HIGH_KIB_S)
+}
+
 fn giveback_floor_pages(max_pages: u32) -> u32 {
     (max_pages / 16).max(INFLATE_STEP_PAGES)
 }
@@ -2226,7 +2308,8 @@ enum Hold {
     NotIdle,
     /// The adjustment is smaller than the dead band.
     DeadBand,
-    /// Inflation gate: PSI is not sustainedly calm (avg10 or avg60 above the low threshold).
+    /// Inflation gate: PSI is not sustainedly calm (avg10 or avg60 above the low threshold), or
+    /// the guest is re-reading its evicted page cache ([`REFAULT_HIGH_KIB_S`]).
     NotCalm,
     /// Inflation gate: inside the post-release cooldown.
     Cooldown,
@@ -2343,9 +2426,16 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
     // balloon-induced thrash from the guest's own workload IO, so a balloon too small to
     // plausibly cause the pain must not be knifed: that was the 08-12 limit cycle, every
     // first step given back the moment it landed and every release lever starved).
+    // The refault arm needs no `io_pain_can_be_ours`: those guards exist because PSI cannot
+    // tell a reader of new data from a guest re-reading what it lost, and refaults can — a
+    // one-pass stream does not refault (see [`REFAULT_HIGH_KIB_S`]). It is also the arm a stock
+    // guest has when its agent may not read PSI, and the one that sees the split layout's
+    // thrash, where MemTotal shrinks with the unplug and MemAvailable counts the very cache
+    // being thrashed, so availability never reads as short.
     if ((p.io_full_avg10 >= IO_PRESSURE_HIGH
         && io_pain_can_be_ours(p.mem_free_kib, p.mem_available_kib, p.mem_total_kib))
-        || p.some_avg60 > PRESSURE_LOW)
+        || p.some_avg60 > PRESSURE_LOW
+        || refaulting(i.refault_kib_s))
         && i.current >= giveback_floor_pages(i.max_pages)
         && desired >= i.current
         && i.host != HostPressure::Critical
@@ -2388,7 +2478,8 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
     } else {
         // Inflation: only from a sustainedly calm guest (a 10 s window is just a busy guest
         // catching its breath), never inside the post-release cooldown, one small step per dwell.
-        if p.some_avg10 > PRESSURE_LOW || p.some_avg60 > PRESSURE_LOW {
+        if p.some_avg10 > PRESSURE_LOW || p.some_avg60 > PRESSURE_LOW || refaulting(i.refault_kib_s)
+        {
             return Decision::Hold(Hold::NotCalm);
         }
         // The post-release cooldown, unless the guest's own free list has since said otherwise.
@@ -2481,6 +2572,8 @@ mod proofs {
             mem_free_kib: kani::any(),
             io_full_avg10: kani::any(),
             io_full_avg60: kani::any(),
+            refault_file: kani::any(),
+            page_kib: kani::any(),
         }
     }
 
@@ -2550,6 +2643,7 @@ mod proofs {
             free_settled_for: kani::any::<bool>()
                 .then(|| Duration::from_secs(kani::any::<u32>() as u64)),
             shortfall_damped: kani::any(),
+            refault_kib_s: kani::any(),
             now: any_instant(),
         }
     }
@@ -2709,6 +2803,7 @@ mod tests {
                 free_settled_since: None,
                 gap: None,
                 gap_ceiling: None,
+                refaults: RefaultRate::default(),
                 elastic_probe: None,
                 inelastic: None,
                 host_debounce: HostDebounce::new(),
@@ -2754,6 +2849,7 @@ mod tests {
             // the pure `decide`; the persistence/settle counters are the caller's state and are
             // exercised through `shortfall_action` and the cases that set this explicitly.
             shortfall_damped: false,
+            refault_kib_s: None,
             now: Instant::now(),
         }
     }
@@ -3134,6 +3230,57 @@ mod tests {
         let mut p = report_with_io_and_free(0, 3 * GIB_PAGES, MAX, 0, 511);
         p.some_avg60 = 707;
         assert_eq!(decide(&p, &i), Decision::GiveBack(cur - INFLATE_STEP_PAGES));
+    }
+
+    /// The split layout's thrash (`balloon_stress`, 2026-10-23): a 2 GiB re-read loop behind
+    /// 5.2 GiB held, io-full far over the bar, yet `MemAvailable` reads 52% of a `MemTotal`
+    /// the unplug shrank — the page cache being thrashed counts as available — so the io arm's
+    /// availability guard never let it fire. The refault rate says what availability cannot.
+    #[test]
+    fn refault_thrash_gives_back_where_availability_reads_fine() {
+        let cur = 3 * GIB_PAGES;
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, cur);
+        let thrash = || report_with_io_and_free(0, MAX * 53 / 100, MAX, 2673, 300);
+        assert!(
+            !matches!(decide(&thrash(), &i), Decision::GiveBack(_)),
+            "the premise: without refaults the io arm declines this shape"
+        );
+        i.refault_kib_s = Some(REFAULT_HIGH_KIB_S);
+        assert_eq!(
+            decide(&thrash(), &i),
+            Decision::GiveBack(cur - INFLATE_STEP_PAGES)
+        );
+
+        // A one-pass reader refaults next to nothing (0.7 MiB/s measured over 10 GiB), so the
+        // restic shape stays declined with the rate known.
+        i.refault_kib_s = Some(700);
+        let restic = report_with_io_and_free(0, (11 * GIB_PAGES) / 2, MAX, 1117, 511);
+        assert!(!matches!(decide(&restic, &i), Decision::GiveBack(_)));
+
+        // The arm keeps the give-back's other guards: Aggressive ignores guest comfort, and a
+        // balloon too small to blame is not knifed.
+        i.refault_kib_s = Some(REFAULT_HIGH_KIB_S);
+        let mut agg = inputs(ReclaimMode::Aggressive, HostPressure::Normal, cur);
+        agg.refault_kib_s = i.refault_kib_s;
+        assert!(!matches!(decide(&thrash(), &agg), Decision::GiveBack(_)));
+        let mut small = inputs(
+            ReclaimMode::Moderate,
+            HostPressure::Normal,
+            giveback_floor_pages(MAX) - 1,
+        );
+        small.refault_kib_s = i.refault_kib_s;
+        assert!(!matches!(decide(&thrash(), &small), Decision::GiveBack(_)));
+    }
+
+    /// A guest re-reading its evicted cache is not one to take more memory from, whatever its
+    /// PSI says — and on an Enforcing Fedora stock guest PSI says nothing at all.
+    #[test]
+    fn refault_thrash_holds_inflation() {
+        let mut i = inputs(ReclaimMode::Moderate, HostPressure::Normal, 0);
+        let p = report_pages(0, 7 * GIB_PAGES, MAX);
+        assert_eq!(decide(&p, &i), Decision::Set(INFLATE_STEP_PAGES));
+        i.refault_kib_s = Some(REFAULT_HIGH_KIB_S);
+        assert_eq!(decide(&p, &i), Decision::Hold(Hold::NotCalm));
     }
 
     /// `report_pages` with the guest's free list set (in pages) — engages the pacing clamp.
@@ -3687,6 +3834,43 @@ mod tests {
             gap_action(Some(&track(now, stuck)), target, stuck, false, now),
             GapAction::Stay
         );
+    }
+
+    /// The refault rate is KiB/s over a full window, whatever the reporting cadence or the
+    /// guest's page size, and it starts over on a counter that went backwards (a reboot) or
+    /// went missing.
+    #[test]
+    fn refaults_become_a_rate_over_a_full_window() {
+        let t0 = Instant::now();
+        let s = |n: u64| t0 + Duration::from_secs(n);
+        // 16 KiB pages, 640 pages a second = 10 MiB/s, reported every second.
+        let mut r = RefaultRate::default();
+        for n in 0..10 {
+            assert_eq!(
+                r.observe(s(n), 1000 + n * 640, 16),
+                None,
+                "no window yet at {n}s"
+            );
+        }
+        assert_eq!(r.observe(s(10), 1000 + 10 * 640, 16), Some(10240));
+        // The window slides: a burst ten seconds ago no longer counts.
+        let mut r = RefaultRate::default();
+        r.observe(s(0), 0, 4);
+        r.observe(s(2), 1_000_000, 4);
+        for n in (4..=40).step_by(2) {
+            r.observe(s(n), 1_000_000, 4);
+        }
+        assert_eq!(r.observe(s(42), 1_000_000, 4), Some(0));
+        // The same bytes from a 4 KiB guest every 2 s read the same.
+        let mut r = RefaultRate::default();
+        for n in (0..=10).step_by(2) {
+            r.observe(s(n), n * 2560, 4);
+        }
+        assert_eq!(r.observe(s(12), 12 * 2560, 4), Some(10240));
+        // A reboot resets; so does a report without the counter.
+        assert_eq!(r.observe(s(14), 5, 4), None);
+        assert_eq!(r.observe(s(30), 5, 0), None);
+        assert_eq!(r.observe(s(31), 5, 4), None);
     }
 
     #[test]
