@@ -138,7 +138,7 @@ The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as 
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
 **Current payload: `payload/limina-guest-tools-f44-r39.tar.zst`** (r39, 2026-10-23: host-side
-repack of r38 with `limina-agent` 0.6.2 at limina `51a556bf`, whose memory report carries
+repack of r38 with `limina-agent` 0.6.2 at limina `5412bdd4`, whose memory report carries
 `/proc/vmstat`'s `workingset_refault_file` and the guest page size, and with the current
 `install-enhanced.sh` (`9ad1e0fb`, which keeps the vendor GPU drivers' ICDs in the Vulkan pin).
 Kernel, mesa and `limina-agent-session` identical to r38. Applied to all four F44 enhanced images
