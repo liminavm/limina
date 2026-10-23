@@ -61,7 +61,7 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
 guest with `rpm -q`; the GPU drivers by `/opt/limina/<wire>/MESA_REV` and `dkms status`. The F44
-enhanced row is what payload r40 installs and `deliver-payload.sh` verifies on each image (agent
+enhanced row is what payload r42 installs and `deliver-payload.sh` verifies on each image (agent
 hashes, the drivers' `MESA_REV`, no limina mesa RPM or driver-selection file, the 16k kernel's
 virtio-gpu resolving to DKMS's module). The dogfood row was read with `uname -r`, `rpm -q`, `dkms
 status` and the vendor tree's `MESA_REV` on the dev VM 2026-10-14. All four F44 enhanced images boot `7.1.13-limina16k.2` as their permanent default. The synoik image never reaches `multi-user.target` (its `plymouth-quit-wait` hangs), so `limina-kernel-promote.service` never fires there: after its trial boot, promote by hand with the unit's own two steps (`grubby --set-default=/boot/vmlinuz-<KREL>`, then disable the unit).
@@ -70,7 +70,7 @@ status` and the vendor tree's `MESA_REV` on the dev VM 2026-10-14. All four F44 
 |---|---|---|---|---|---|
 | **F44 stock** (`vanilla`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 stock + freeworld VA** (`accessible`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.1.8-1.fc44` + `mesa-va-drivers-freeworld-26.1.8-1.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) | `limina-kernel-16k-7.1.13-2` (+ `-devel`; virtio-gpu is limina's DKMS module `f9ecadf79ee1`) | 16 KiB | **stock** `26.2.5-1.fc44` (distro-synced by the installer), plus the vendor drivers under `/opt/limina/5` (`[kosmickrisp-guest]` `23a28823ed4`) | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) | `limina-kernel-16k-7.1.13-2` (+ `-devel`; virtio-gpu is limina's DKMS module `852836da0d9d`) | 16 KiB | **stock** `26.2.5-1.fc44` (distro-synced by the installer), plus the vendor drivers under `/opt/limina/5` (`[kosmickrisp-guest]` `1b9049a75d7`) | `50.1-1.limina.fc44` | `50.0` (stock) |
 | **F44 dogfood deployment** (the user's dev VM) | `limina-kernel-16k-7.1.13-2` (+ `-devel`; default `7.1.13-limina16k.2`, `7.1.13-1` and `7.1.9-1` kept as fallbacks; virtio-gpu is limina's DKMS module `7889c378f3d2`) | 16 KiB | **stock** `26.2.4-1.fc44`, plus the vendor drivers under `/opt/limina/4` (KosmicKrisp `0144c30fc8c`) | n/a: synoik | n/a: synoik |
 
 Two facts the table cannot show:
@@ -78,7 +78,7 @@ Two facts the table cannot show:
 - **The guest agents are not RPMs and so are not in the table.** All four F44 enhanced images
   (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) carry **`limina-agent` 0.6.2**
   and **`limina-agent-session` 0.1.4**, installed to `/usr/local/bin` with their units (payload
-  **r40**). The dogfood guest:
+  **r42**). The dogfood guest:
   - is current on `limina-agent`: 0.6.2, the r39 binary installed by hand 2026-10-23, with 0.6.1
     kept beside it as `limina-agent.0.6.1.bak`;
   - is current on `limina-agent-session`: 0.1.4, the r38 binary installed by hand 2026-10-22, with
@@ -145,13 +145,11 @@ The enhanced tier is a **payload**, `payload/limina-guest-tools-f44-rNN.tar.zst`
 which `install-enhanced.sh` applies inside a running stock or enhanced guest. The guest keeps its
 distro's Mesa; nothing of the distro's is replaced, locked or shadowed.
 
-**Current payload: `payload/limina-guest-tools-f44-r41.tar.zst`** — `limina-kernel-16k-7.1.13-2`
-(+ `-devel`), the GPU drivers `/opt/limina/5` at `[kosmickrisp-guest]` `23a28823ed4` with DKMS
-`limina-virtio-gpu` `016b24bd4423` (series 6.19, 7.1, 7.2), `limina-agent` 0.6.2,
-`limina-agent-session` 0.1.4. The four F44 enhanced images carry r40, which installs the same
-drivers, module sources, kernel and agents (DKMS label `f9ecadf79ee1`); r41 differs only in the
-drivers' installer, which r40 could end silently after copying the drivers (`ldconfig | awk
-'…exit'` under pipefail). Its `manifest.txt` lists the exact contents and hashes.
+**Current payload: `payload/limina-guest-tools-f44-r42.tar.zst`** — `limina-kernel-16k-7.1.13-2`
+(+ `-devel`), the GPU drivers `/opt/limina/5` at `[kosmickrisp-guest]` `1b9049a75d7` with DKMS
+`limina-virtio-gpu` `852836da0d9d` (series 6.19, 7.1, 7.2), `limina-agent` 0.6.2,
+`limina-agent-session` 0.1.4. Applied to all four F44 enhanced images (`.bak-pre-r42.raw` CoW
+backups). Its `manifest.txt` lists the exact contents and hashes.
 
 What a payload contains (`scripts/package-enhanced.sh` writes it):
 
@@ -186,7 +184,7 @@ What the installer does, each step additive and idempotent (partial states are n
 cargo xtask enhanced                  # 16k kernel RPM + -devel → target/enhanced-rpms/kernel
 scripts/build-gpu-drivers.sh          # vendor drivers from [kosmickrisp-guest] → target/gpu-drivers
 scripts/package-gpu-drivers.sh        # + the DKMS module → target/gpu-drivers/limina-gpu-drivers
-NOTE="what changed" scripts/package-enhanced.sh r41   # → payload/limina-guest-tools-f44-r41.tar.zst
+NOTE="what changed" scripts/package-enhanced.sh rNN   # → payload/limina-guest-tools-f44-rNN.tar.zst
 ```
 
 Rebuild only what changed: when the kernel did not move, skip its step and let `package-enhanced.sh`
@@ -502,7 +500,7 @@ cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw
 | `Fedora-Workstation-44.enhanced.raw` | **Enhanced base** — `accessible` grown to 40 G + the current payload through `install-enhanced.sh` (§Delivery; versions in §Component versions). **✅ FINALIZED 2026-06-29**: seated GNOME, WebGL 5000-fish ~60fps on venus→KK→Metal (5-signal+pixel verified); mutter 0003 rebased to 50.1 (`ext_data_control_manager` live in `libmutter-18`); limina-agent (native gnu) active+connected; relabel-clean; build cruft removed. Kernel kept Fedora-config **with debug symbols** (no strip — ~7 GiB modules, slower boot, by choice). Now also carries the **L2 test tooling** (glmark2 + apitrace/`eglretrace` GL replay + `/opt/gfxreconstruct/bin/gfxrecon-replay` VK replay) — folded into `make-accessible.sh` going forward; the enhanced *delivery* (`install-enhanced.sh`) does **not** ship these, so a migrated daily-driver guest stays clean. **Respun 2026-07-04 to kernel `7.1.2-limina16k` + mesa `26.1.3-3` (dogfood parity — see the respin note above); versions in this row are the 2026-06-29 baseline.** **REBUILT FRESH 2026-07-05** from `accessible` per the procedure above (the prior `enhanced.raw`/`.test.raw` had accumulated bad state — the 16k kernel failed its `/boot/efi` mount and dropped to the rescue BLS entry; a clean clone+install booted `7.1.2-limina16k` with `/boot/efi` mounted, venus seated on the new KK). | ✅ finalized 2026-06-29; respun 2026-07-04; rebuilt 2026-07-05 |
 | `Fedora-Workstation-44.enhanced.test.raw` | **Enhanced-tier L2 image** — frozen CoW snapshot of `enhanced` (`seated_efi_fedora_from_env` for `LIMINA_FEDORA_REL=44`). Refresh: `cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw`. **Recloned 2026-07-05 from the fresh rebuild** (see the `enhanced.raw` note). | ✅ **L2 GREEN 7/7 2026-06-29** (venus×3 + replay×3 + reset; replay tooling baked in); recloned 2026-07-05 |
 | `Fedora-Workstation-44.tpm.test.raw` | **vTPM L2 image** — CoW clone of `stock.test` with the TPM consumers installed (tpm2-pkcs11 + tools, clevis, tpm2-openssl, opensc, openssl, ssh-tpm-agent v0.9.0 checksum-pinned), nothing else: no `tss` membership and no TPM state (`tpm_fedora_from_env`, `LIMINA_TEST_DISK_TPM`). Make it with `scripts/provision/make-tpm-test-image.sh`; refresh by deleting it and running that again after `stock.test` changes. | ✅ built 2026-10-07 |
-| `Fedora-Workstation-44.metal.test.raw` | **Native-context transport L2 image** — `stock.test` (stock kernel `6.19.10-300.fc44`, 4 KiB) + limina's vendor GPU drivers as a guest gets them, from `scripts/provision/deliver-metal-transport.sh` (the payload's own installer): the drivers under `/opt/limina/<wire>/`, found through `/etc/glvnd/egl_vendor.d/10_limina-<wire>.json`, `/etc/vulkan/icd.d/limina-<wire>.json` and libgbm's `virtio_gpu_gbm.so`, and the extended virtio-gpu module through DKMS (`/lib/modules/<krel>/extra/`, initramfs rebuilt). Nothing in the environment selects them: booted with the transport, gnome-shell and GL clients run on it and Vulkan clients see KosmicKrisp first (an implicit layer hides venus's devices behind it); booted without it, current drivers serve the device through our virgl and venus (the `340ed84bf1b` tree in the status cell serves only the transport and leaves the guest stock without it). A client whose `VK_DRIVER_FILES` leaves ours out gets the system's drivers either way. Also carries the perf battery's tooling (`make-accessible.sh`'s glmark2, apitrace and `/opt/gfxreconstruct`, built with `-DGFXRECON_ENABLE_OPENXR=OFF` since gfxreconstruct's OpenXR wants X11 headers the recipe lacks, plus `vkmark`), so both GPU transports are measured on one 4 KiB guest. The worker offers the extension with `--gpu-metal` (a managed VM's `display.metal_transport`) or `LIMINA_GPU_METAL=1`. Refresh the drivers: `scripts/build-gpu-drivers.sh`, `scripts/package-gpu-drivers.sh`, then the delivery, which upgrades in place. | ✅ vendor drivers delivered to `metal.test` from r41's GPU-driver package: `/opt/limina/5` from `[kosmickrisp-guest]` `23a28823ed4`, module `limina-virtio-gpu/016b24bd4423` in the root and the initramfs (series 6.19, 7.1 and 7.2). These drivers decline a host speaking another wire VERSION's transport and serve that device through virgl and venus. Backup of the previous state: `.bak-pre-metal.raw`. |
+| `Fedora-Workstation-44.metal.test.raw` | **Native-context transport L2 image** — `stock.test` (stock kernel `6.19.10-300.fc44`, 4 KiB) + limina's vendor GPU drivers as a guest gets them, from `scripts/provision/deliver-metal-transport.sh` (the payload's own installer): the drivers under `/opt/limina/<wire>/`, found through `/etc/glvnd/egl_vendor.d/10_limina-<wire>.json`, `/etc/vulkan/icd.d/limina-<wire>.json` and libgbm's `virtio_gpu_gbm.so`, and the extended virtio-gpu module through DKMS (`/lib/modules/<krel>/extra/`, initramfs rebuilt). Nothing in the environment selects them: booted with the transport, gnome-shell and GL clients run on it and Vulkan clients see KosmicKrisp first (an implicit layer hides venus's devices behind it); booted without it, current drivers serve the device through our virgl and venus (the `340ed84bf1b` tree in the status cell serves only the transport and leaves the guest stock without it). A client whose `VK_DRIVER_FILES` leaves ours out gets the system's drivers either way. Also carries the perf battery's tooling (`make-accessible.sh`'s glmark2, apitrace and `/opt/gfxreconstruct`, built with `-DGFXRECON_ENABLE_OPENXR=OFF` since gfxreconstruct's OpenXR wants X11 headers the recipe lacks, plus `vkmark`), so both GPU transports are measured on one 4 KiB guest. The worker offers the extension with `--gpu-metal` (a managed VM's `display.metal_transport`) or `LIMINA_GPU_METAL=1`. Refresh the drivers: `scripts/build-gpu-drivers.sh`, `scripts/package-gpu-drivers.sh`, then the delivery, which upgrades in place. | ✅ vendor drivers delivered to `metal.test` from r42's GPU-driver package: `/opt/limina/5` from `[kosmickrisp-guest]` `1b9049a75d7`, module `limina-virtio-gpu/852836da0d9d` in the root and the initramfs (series 6.19, 7.1 and 7.2). These drivers decline a host speaking another wire VERSION's transport and serve that device through virgl and venus. Backup of the previous state: `.bak-pre-metal.raw`. |
 | `Fedora-Workstation-44.enhanced.kde.raw` | **KDE Plasma image** — `enhanced.test` + Plasma 6.7 from the F44 repos, autologin into Plasma, KWin on GL compositing (needs the query fix, see its section). See its section above. | ✅ built 2026-10-03; idle-inhibit paths verified |
 
 **All five F44 images above plus `enhanced.synoik` boot with a zero GRUB menu timeout**
