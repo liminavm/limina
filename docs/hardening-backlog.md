@@ -1753,9 +1753,11 @@ that reproduces it (loop the test under suite-like load with the VM held on fail
 
 ### `the_guest_vblank_falls_on_the_host_grid` has single vblanks far off the grid under load
 `l2_host_vblank.rs` allows 50 µs (1200 ticks) of phase error on each of 30 vblanks; failing runs have
-one outlier while the rest sit at 50–550 ticks: 1732 ticks (2026-10-18) and 3751 ticks (2026-10-19,
-next to a 404013/396739 spacing pair, i.e. one late wake that the next one caught up). Both were
-under a full suite; the test passed alone straight after. Open: whether the outlier is guest
+one outlier while the rest sit at 50–550 ticks: 1732 ticks (2026-10-18), 3751 ticks (2026-10-19,
+next to a 404013/396739 spacing pair, i.e. one late wake that the next one caught up), 2177 and
+3201 ticks (2026-10-23, two suite runs in a row, each beside the same kind of spacing pair). All were
+under a full suite; the test passed alone straight after (on 2026-10-23 three runs in a row, every
+error within 270 ticks). Open: whether the outlier is guest
 scheduling (the wake latencies the test prints reach 2.6 ms), the host vsync source, or the push
 path — and then whether the oracle should tolerate a bounded number of late wakes or the late wake
 is a real defect.
