@@ -128,7 +128,8 @@ HOOK
 # Where the system's libgbm looks for backends: the directory beside the libgbm it loads.
 gbm_backend_dir() {
   local lib
-  lib="$(ldconfig -p | awk '/libgbm\.so\.1 / {print $NF; exit}')"
+  # awk reads to the end: an early exit fails ldconfig with SIGPIPE under pipefail.
+  lib="$(ldconfig -p | awk '/libgbm\.so\.1 / && !f {print $NF; f=1}')"
   [ -n "$lib" ] || return 1
   printf '%s/gbm\n' "$(dirname "$(readlink -f "$lib")")"
 }
@@ -227,7 +228,7 @@ fi
 # libva searches one path list, which only the environment sets. The system's own directories
 # follow ours, so a driver we do not carry is still found.
 vadirs="$N/lib/dri"
-libva="$(ldconfig -p | awk '/libva\.so\.2 / {print $NF; exit}')"
+libva="$(ldconfig -p | awk '/libva\.so\.2 / && !f {print $NF; f=1}')"
 if [ -n "$libva" ]; then
   libdir="$(dirname "$(readlink -f "$libva")")"
   for d in "$libdir/dri-nonfree" "$libdir/dri-freeworld" "$libdir/dri"; do
