@@ -37,7 +37,8 @@ fn a_stock_guest_feeds_the_balloon_policy_through_its_guest_agent() {
         Ok(cfg) => cfg
             .with_net()
             .with_memory(MIN_MIB, MAX_MIB)
-            .with_balloon_control(),
+            .with_balloon_control()
+            .with_supervisor_log(),
         Err(e) => {
             eprintln!("SKIPPED {name}: {e}");
             return;
