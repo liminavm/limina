@@ -72,9 +72,9 @@ guest with `rpm -q`. Last verified by `uname -r`, `grubby --default-kernel` and 
 Two facts the table cannot show:
 
 - **The guest agents are not RPMs and so are not in the table.** All four F44 enhanced images
-  (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) carry **`limina-agent` 0.6.1**
+  (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) carry **`limina-agent` 0.6.2**
   and **`limina-agent-session` 0.1.4**, installed to `/usr/local/bin` with their units (payload
-  **r38**, delivered 2026-10-22). The dogfood guest:
+  **r39**, delivered 2026-10-23). The dogfood guest:
   - is behind on `limina-agent`: 0.6.0, taken by hand on 2026-09-03 straight from 0.4.0 (its
     first agent with the `vcpu` cap);
   - is current on `limina-agent-session`: 0.1.4, the r38 binary installed by hand 2026-10-22, with
@@ -89,7 +89,9 @@ Two facts the table cannot show:
     signal), and shuts a host channel down rather than dropping one half of it;
   - 0.1.1's drop-after-accept backoff (r27) stops a host that drops a channel within 5 s of
     opening it from turning into a connect storm.
-  Check the helper with `limina-agent-session --version`. 0.6.1 added
+  Check the helper with `limina-agent-session --version`. 0.6.2 added the guest's file refault
+  counter and page size to the memory report, which the host's balloon policy gives memory back
+  on when the guest thrashes its page cache; 0.6.1 added
   the CPU utilisation and stall rates the host's vCPU grow rule needs; 0.6.0 added the
   `powerprofile` capability (the GNOME power-mode toggle reaching host policy); 0.5.0 added `vcpu`,
   the floor for dynamic vCPU offlining. Check the version in a guest with `limina-agent --version`, which is also the
@@ -135,7 +137,13 @@ is standing in as the compatibility floor.
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r38.tar.zst`** (r38, 2026-10-22: host-side
+**Current payload: `payload/limina-guest-tools-f44-r39.tar.zst`** (r39, 2026-10-23: host-side
+repack of r38 with `limina-agent` 0.6.2 at limina `51a556bf`, whose memory report carries
+`/proc/vmstat`'s `workingset_refault_file` and the guest page size, and with the current
+`install-enhanced.sh` (`9ad1e0fb`, which keeps the vendor GPU drivers' ICDs in the Vulkan pin).
+Kernel, mesa and `limina-agent-session` identical to r38. Applied to all four F44 enhanced images
+(`.bak-pre-r39.raw` CoW backups), both agent hashes verified, kernel install short-circuited, no
+trial boot owed; each image's pin kept `limina-5.json` ahead of venus.) Previous: r38 (2026-10-22: host-side
 repack of r37 with `limina-agent-session` 0.1.4 at limina `d79f24e8`, which gates the arrangement
 report on seat0's `ACTIVE_UID` instead of the user's logind `STATE`, so a seatless session (`sudo -u`,
 `su`, ssh, cron) as a user with a background graphical session no longer lets that session's helper
