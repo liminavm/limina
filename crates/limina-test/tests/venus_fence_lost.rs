@@ -122,8 +122,7 @@ fn lost_context_fence_still_signals_its_sync_file() {
     // sudo everywhere below: the headless (multi-user.target) session has no logind
     // seat, so no uaccess ACL lands on /dev/dri and the loader enumerates nothing
     // as a plain user.
-    const STORM_ENV: &str =
-        "sudo env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json";
+    const STORM_ENV: &str = concat!("sudo env VK_DRIVER_FILES=", limina_test::venus_icd!());
 
     // Phase 1 — storm health: with the seam unarmed, every export must signal.
     let out = g

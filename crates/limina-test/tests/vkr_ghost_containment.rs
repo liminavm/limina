@@ -43,6 +43,7 @@
 //! cleanly if missing. Gated behind LIMINA_HVF_TESTS; run via
 //! `scripts/test-boot.sh`.
 
+use limina_test::VENUS_ICD;
 use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
@@ -92,10 +93,10 @@ fn refused_venus_import_leaves_the_context_alive() {
     // forcealloc: no props gate, so the host refusal lands on vkAllocateMemory —
     // the zink shape, and the one that mints a ghost on an async guest.
     let out = guest
-        .ssh_exec(
-            "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
-             timeout 120 python3 /tmp/vkudmabufimport.py Venus forcealloc 2>&1 || true",
-        )
+        .ssh_exec(&format!(
+            "VK_DRIVER_FILES={VENUS_ICD} \
+             timeout 120 python3 /tmp/vkudmabufimport.py Venus forcealloc 2>&1 || true"
+        ))
         .expect("running vkudmabufimport in the guest");
     eprintln!("--- vkudmabufimport forcealloc ---\n{out}");
 

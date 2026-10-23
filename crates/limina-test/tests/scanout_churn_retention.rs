@@ -98,7 +98,7 @@ const MAX_BYTE_GROWTH: i64 = 64 * 1024 * 1024;
 /// The venus ICD selection, and deliberately nothing else. A non-login ssh shell does not
 /// source `/etc/environment.d`, so the driver has to be named here; the `-vk` arm needs no
 /// gallium/gbm selectors at all, which is half of why it is the arm this test runs.
-const VENUS_ENV: &str = "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json";
+const VENUS_ENV: &str = concat!("VK_DRIVER_FILES=", limina_test::venus_icd!());
 
 /// Parse one vmmap size cell ("896K", "436.8M", "8.4G") into bytes.
 fn parse_size(cell: &str) -> Option<i64> {

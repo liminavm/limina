@@ -58,7 +58,7 @@ const CHUNK_MIB: usize = 256;
 /// wide margin, or "no refusal" would be ambiguous between a broken cap and a short loop.
 const MAX_CHUNKS: usize = 32;
 
-const ICD: &str = "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json";
+const ICD: &str = concat!("VK_DRIVER_FILES=", limina_test::venus_icd!());
 
 #[test]
 fn runaway_guest_allocation_kills_the_client_not_the_vm() {

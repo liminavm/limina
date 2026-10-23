@@ -30,6 +30,7 @@
 //! cleanly if missing. Gated behind LIMINA_HVF_TESTS; run via
 //! `scripts/test-boot.sh`.
 
+use limina_test::VENUS_ICD;
 use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
@@ -91,8 +92,10 @@ fn empty_clear_rect_does_not_abort_the_worker() {
     // and ssh returns an error / partial output; we assert on both the output and worker liveness.
     let out = guest
         .ssh_exec_timeout(
-            "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
-             timeout 60 python3 /tmp/vkclearrect.py Venus 2>&1 || true",
+            &format!(
+                "VK_DRIVER_FILES={VENUS_ICD} \
+                 timeout 60 python3 /tmp/vkclearrect.py Venus 2>&1 || true"
+            ),
             Duration::from_secs(90),
         )
         .expect("running vkclearrect in the guest");

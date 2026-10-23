@@ -30,8 +30,11 @@ use limina_test::{Guest, GuestConfig};
 /// dev-image override and keeps the check on the two-tier-baseline driver.
 /// `|| true`: when venus is absent vulkaninfo exits non-zero, but its printed device list is
 /// the oracle (per CLAUDE.md, exit codes lie) — the `Virtio-GPU Venus` substring check decides.
-const VK_PROBE: &str = "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
-                        vulkaninfo --summary 2>&1 || true";
+const VK_PROBE: &str = concat!(
+    "VK_DRIVER_FILES=",
+    limina_test::venus_icd!(),
+    " vulkaninfo --summary 2>&1 || true"
+);
 
 #[test]
 fn venus_survives_virtio_gpu_reset() {

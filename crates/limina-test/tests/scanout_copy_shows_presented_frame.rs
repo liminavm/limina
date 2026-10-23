@@ -64,7 +64,7 @@ const SECOND: (u32, u32) = (1024, 768);
 const SURFACES_PER_OUTPUT: usize = 6;
 
 /// Venus ICD selection for a non-login ssh shell; the `-vk` arm needs nothing else.
-const VENUS_ENV: &str = "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json";
+const VENUS_ENV: &str = concat!("VK_DRIVER_FILES=", limina_test::venus_icd!());
 
 /// About fifteen seconds of flips at 60 Hz.
 const FRAMES: u32 = 900;

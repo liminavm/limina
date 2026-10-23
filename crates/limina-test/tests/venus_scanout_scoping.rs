@@ -56,7 +56,7 @@ const KMSCHURN: &str = include_str!("../guest/kmschurn.py");
 const DISPLAY: (u32, u32) = (1280, 800);
 
 /// Venus ICD selection for a non-login ssh shell; the `-vk` arm needs nothing else.
-const VENUS_ENV: &str = "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json";
+const VENUS_ENV: &str = concat!("VK_DRIVER_FILES=", limina_test::venus_icd!());
 
 /// Frames for the detached presenter: at ~60 flips/s about half an hour, far past the test.
 const PRESENTER_FRAMES: u32 = 100_000;

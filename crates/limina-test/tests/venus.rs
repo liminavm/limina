@@ -17,6 +17,7 @@
 //! SKIPs cleanly if its prerequisite is missing. Gated behind LIMINA_HVF_TESTS; run via
 //! `scripts/test-boot.sh`. This is a heavy test (full Fedora desktop boot on a custom kernel).
 
+use limina_test::VENUS_ICD;
 use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
@@ -75,10 +76,9 @@ fn venus_enumerates_on_16k_kernel() {
     // creating an instance+device on venus is exactly the host-visible-blob map path that
     // fails on a 4 KiB guest.
     let vk = guest
-        .ssh_exec(
-            "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
-             vulkaninfo --summary 2>&1",
-        )
+        .ssh_exec(&format!(
+            "VK_DRIVER_FILES={VENUS_ICD} vulkaninfo --summary 2>&1"
+        ))
         .expect("running vulkaninfo in the guest");
     eprintln!("--- vulkaninfo --summary ---\n{vk}");
     assert!(
@@ -98,23 +98,22 @@ fn venus_enumerates_on_16k_kernel() {
     eprintln!("teardown outcome: {outcome:?}");
 }
 
-/// The **productized** enhanced tier: our *shipped* mesa (the versionlocked `*.limina` RPM at `/usr`)
-/// on the enhanced golden (`enhanced.test.raw`) must enumerate venus AND bring up a live seated GNOME
-/// session on it. Where [`venus_enumerates_on_16k_kernel`] proves *stock* mesa's venus on an external
-/// 16k kernel, and `venus_replay` proves trace-replay render correctness (guest-side pixels), this
-/// validates the actual shipped product: our RPM mesa driving a real autologin session. Since
-/// the drop-guest-zink flip the session's GL rides virgl→vrend (EGLImage-backed IOSurface
-/// scanout); venus is the Vulkan side (`VK_DRIVER_FILES` → virtio ICD) — this test's identity checks
-/// (16k pages, `*.limina` RPMs, venus ICD present, session up) hold across that change. Heavy (full
-/// enhanced desktop boot); SKIPs without KK or the enhanced disk.
+/// The **productized** enhanced tier: limina's GPU drivers (under `/opt/limina`, beside the distro's
+/// own Mesa) on the enhanced golden (`enhanced.test.raw`) must serve a live seated GNOME session.
+/// Where [`venus_enumerates_on_16k_kernel`] proves *stock* mesa's venus on an external 16k kernel,
+/// and `venus_replay` proves trace-replay render correctness (guest-side pixels), this validates the
+/// shipped product's identity: the 16k kernel, the distro's Mesa left in place, and the session's
+/// compositor running on our drivers rather than on it — with our venus and our VA driver where
+/// the system's loaders find them. Heavy (full enhanced desktop boot); SKIPs without KK or the
+/// enhanced disk.
 #[test]
-fn our_mesa_venus_renders_seated_desktop() {
-    if !limina_test::require_hvf_or_skip("our_mesa_venus_renders_seated_desktop") {
+fn our_drivers_serve_seated_desktop() {
+    if !limina_test::require_hvf_or_skip("our_drivers_serve_seated_desktop") {
         return;
     }
     if limina_test::kosmickrisp_icd().is_none() {
         eprintln!(
-            "SKIPPED our_mesa_venus_renders_seated_desktop: no KosmicKrisp ICD under \
+            "SKIPPED our_drivers_serve_seated_desktop: no KosmicKrisp ICD under \
              /Volumes/mesa-cs/build-kk (mount third_party/mesa-cs.sparseimage and ninja)"
         );
         return;
@@ -132,12 +131,12 @@ fn our_mesa_venus_renders_seated_desktop() {
             .with_net()
             .with_env("LIMINA_PRESENT_COPY", "1"),
         Err(e) => {
-            eprintln!("SKIPPED our_mesa_venus_renders_seated_desktop: {e}");
+            eprintln!("SKIPPED our_drivers_serve_seated_desktop: {e}");
             return;
         }
     };
     eprintln!(
-        "booting the enhanced (our-mesa) seated venus desktop via {:?}",
+        "booting the enhanced seated desktop via {:?}",
         cfg.limina_bin
     );
 
@@ -157,45 +156,42 @@ fn our_mesa_venus_renders_seated_desktop() {
         "expected a 16 KiB-page guest, got PAGE_SIZE={pagesize:?}"
     );
 
-    // ... and it is OUR mesa (the versionlocked `*.limina` RPM set), not stock — the distinction
-    // from the stock-mesa `venus_enumerates_on_16k_kernel`.
+    // ... the distro's own Mesa at /usr, untouched: our drivers install beside it ...
     let mesa = guest
-        .ssh_exec("rpm -qa 'mesa*' 2>&1")
+        .ssh_exec("rpm -qa 'mesa*' --qf '%{NAME}-%{VERSION}-%{RELEASE}\\n' 2>&1")
         .expect("querying the guest mesa RPMs");
     eprintln!("--- guest mesa RPMs ---\n{mesa}");
     assert!(
-        mesa.contains("limina"),
-        "expected our '*.limina' mesa RPM set (is this really the enhanced image?).\n{mesa}"
+        mesa.contains("mesa-") && !mesa.contains("limina"),
+        "expected the distro's mesa RPMs, none of ours.\n{mesa}"
     );
 
-    // ... and our mesa ships the **venus (virtio) Vulkan ICD** — the driver zink loads to reach the
-    // host GPU. We assert the ICD is installed rather than run `vulkaninfo`: vulkan-tools isn't on the
-    // image, and full venus enumeration (`GL_RENDERER = Virtio-GPU Venus`) + pixel-exact render on this
-    // SAME image are already proven by `venus_replay` — re-running them here would only duplicate it.
-    // This test's distinct job is the productization IDENTITY guard: our 16k kernel + our `*.limina`
-    // mesa with venus shipped, booting a real seated session.
-    let icd = guest
+    // ... our venus and VA driver where the system's loaders find them ...
+    let found = guest
         .ssh_exec(
-            "test -f /usr/share/vulkan/icd.d/virtio_icd.aarch64.json && echo PRESENT || echo MISSING",
+            "test -e /etc/vulkan/icd.d/limina-venus.json && echo venus-icd; \
+             . /etc/environment.d/90-limina-va.conf 2>/dev/null; \
+             test -e \"${LIBVA_DRIVERS_PATH%%:*}/virtio_gpu_drv_video.so\" && \
+             case $LIBVA_DRIVERS_PATH in /opt/limina/*) echo va-driver ;; esac",
         )
-        .expect("checking for the venus virtio ICD");
+        .expect("checking for our venus ICD and VA driver");
     assert!(
-        icd.contains("PRESENT"),
-        "our mesa did not install the venus virtio ICD at \
-         /usr/share/vulkan/icd.d/virtio_icd.aarch64.json — got {icd:?}"
+        found.contains("venus-icd") && found.contains("va-driver"),
+        "our venus ICD or VA driver is not installed — got {found:?}"
     );
 
-    // The seated GNOME session actually came up on the enhanced stack (autologin → gnome-shell), i.e.
-    // our 16k kernel + our mesa bring up a real desktop. We poll for the running gnome-shell PROCESS
-    // (what venus_replay implicitly relies on via the session's Xwayland auth) rather than grep the
-    // journal for a message string — robust across the system/user journal split. Pixel-level render
-    // correctness THROUGH venus is `venus_replay`'s job; the HOST present path (read_capture) is
-    // intentionally NOT asserted here.
+    // ... and the seated session's compositor running on OUR GL: gnome-shell maps the libgallium
+    // under /opt/limina, not the distro's. The greeter's shell may come first, so poll until a
+    // shell maps ours. Pixel-level render correctness is `venus_replay`'s job; the HOST present
+    // path (read_capture) is intentionally NOT asserted here.
     guest
-        .ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
-        .expect(
-            "gnome-shell process never appeared — the productized seated session didn't come up",
-        );
+        .ssh_poll(
+            "for p in $(pgrep -x gnome-shell); do \
+               sudo grep -q '/opt/limina/[0-9]*/lib/libgallium' /proc/$p/maps && exit 0; \
+             done; exit 1",
+            Duration::from_secs(180),
+        )
+        .expect("no gnome-shell maps our libgallium — the session is not on limina's drivers");
 
     let outcome = guest
         .shutdown(Duration::from_secs(10))
@@ -212,7 +208,7 @@ fn our_mesa_venus_renders_seated_desktop() {
 /// error")`, so no frame reaches the capture PNG and the read-back stays blank/stale. A software-2D
 /// scanout (`fedora_stock_image_..._renders_desktop`) and the windowed app both present fine — the
 /// gap is specifically (venus blob × capture sink). When the host present path is fixed this asserts
-/// a real rendered venus desktop and becomes the regression guard; [`our_mesa_venus_renders_seated_desktop`]
+/// a real rendered venus desktop and becomes the regression guard; [`our_drivers_serve_seated_desktop`]
 /// covers the same boot but deliberately stops at session-up because of this gap.
 #[test]
 fn venus_desktop_pixel_verifies_through_host_capture() {

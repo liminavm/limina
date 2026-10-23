@@ -30,6 +30,7 @@
 //! itself runs on limina's vendor drivers and the venus clients beside it on venus: the restore
 //! has to bring back both transports' worlds, and the compositor's is the transport's.
 
+use limina_test::VENUS_ICD;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -200,9 +201,11 @@ fn run(test: &str, config: fn() -> anyhow::Result<GuestConfig>, premise: fn(&Gue
     );
     ssh_retry(
         &g1,
-        "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
-         setsid nohup python3 /tmp/vkfdhold.py Venus </dev/null >/tmp/vkfdhold.out 2>&1 & \
-         echo spawned",
+        &format!(
+            "VK_DRIVER_FILES={VENUS_ICD} \
+             setsid nohup python3 /tmp/vkfdhold.py Venus </dev/null >/tmp/vkfdhold.out 2>&1 & \
+             echo spawned"
+        ),
     );
     g1.ssh_poll(
         "grep -q 'FDHOLD READY' /tmp/vkfdhold.out",
@@ -228,10 +231,12 @@ fn run(test: &str, config: fn() -> anyhow::Result<GuestConfig>, premise: fn(&Gue
     );
     ssh_retry(
         &g1,
-        "rm -f /tmp/vkcontent-go; \
-         VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
-         setsid nohup python3 /tmp/vkcontent.py Venus </dev/null >/tmp/vkcontent.out 2>&1 & \
-         echo spawned",
+        &format!(
+            "rm -f /tmp/vkcontent-go; \
+             VK_DRIVER_FILES={VENUS_ICD} \
+             setsid nohup python3 /tmp/vkcontent.py Venus </dev/null >/tmp/vkcontent.out 2>&1 & \
+             echo spawned"
+        ),
     );
     g1.ssh_poll(
         "grep -q 'CONTENT READY' /tmp/vkcontent.out",
@@ -259,9 +264,11 @@ fn run(test: &str, config: fn() -> anyhow::Result<GuestConfig>, premise: fn(&Gue
     );
     ssh_retry(
         &g1,
-        "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
-         setsid nohup python3 /tmp/vkpipeline.py Venus </dev/null >/tmp/vkpipeline.out 2>&1 & \
-         echo spawned",
+        &format!(
+            "VK_DRIVER_FILES={VENUS_ICD} \
+             setsid nohup python3 /tmp/vkpipeline.py Venus </dev/null >/tmp/vkpipeline.out 2>&1 & \
+             echo spawned"
+        ),
     );
     g1.ssh_poll(
         "grep -q 'PIPE READY' /tmp/vkpipeline.out",

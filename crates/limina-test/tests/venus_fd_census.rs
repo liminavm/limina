@@ -28,6 +28,7 @@
 //! KosmicKrisp; SKIPs cleanly if missing. Gated behind LIMINA_HVF_TESTS; run via
 //! `scripts/test-boot.sh`.
 
+use limina_test::VENUS_ICD;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -123,7 +124,7 @@ fn cross_context_attach_leaves_worker_fd_census_flat() {
 
     let out = guest
         .ssh_exec(&format!(
-            "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
+            "VK_DRIVER_FILES={VENUS_ICD} \
              timeout 180 python3 /tmp/vkfdcycle.py Venus {CYCLES} 2>&1 || true"
         ))
         .expect("running vkfdcycle in the guest");

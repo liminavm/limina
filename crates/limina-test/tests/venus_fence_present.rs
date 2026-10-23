@@ -33,6 +33,7 @@
 //! KosmicKrisp; SKIPs cleanly if missing. Gated behind LIMINA_HVF_TESTS; run via
 //! `scripts/test-boot.sh`.
 
+use limina_test::VENUS_ICD;
 use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
@@ -88,11 +89,10 @@ fn fence_present_chain_presents_and_never_wedges() {
         .ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
         .expect("gnome-shell never appeared — the seated enhanced session didn't come up");
 
-    // Re-create the venus-compositor vehicle: the golden's session GL rides virgl/vrend
-    // since drop-guest-zink, and vrend's EGLImage scanouts never park — only venus BLOB
-    // scanouts do. Flip THIS clone's session to zink→venus (99- overrides the installed
-    // 90-limina-zink.conf; environment.d merges lexically, later wins) and restart gdm so
-    // the autologin session comes back up on venus. MESA_LOADER_DRIVER_OVERRIDE=zink also
+    // Re-create the venus-compositor vehicle: the golden's session GL rides virgl/vrend,
+    // and vrend's EGLImage scanouts never park — only venus BLOB scanouts do. Flip THIS
+    // clone's session to zink→venus (an environment.d file) and restart gdm so the
+    // autologin session comes back up on venus. MESA_LOADER_DRIVER_OVERRIDE=zink also
     // flips gbm's backing driver, making the compositor's KMS buffers venus blobs — that
     // is the point, not a side effect (see memory limina-classic-gbm-venus-import).
     // environment.d is only re-read when the USER manager (user@1000) starts, so the
@@ -104,16 +104,15 @@ fn fence_present_chain_presents_and_never_wedges() {
     // stop-gdm → stop-user@ → start-gdm sequence was likewise verified live: the new
     // session's environ shows zink and gnome-shell maps libvulkan_virtio. Detached
     // (systemd-run) because stopping gdm tears down our own ssh session's scope.
-    // The Vulkan list names venus alone: on the Metal transport the vendor drivers would
-    // otherwise take the compositor, and they serve no client whose list leaves them out.
+    // The Vulkan list names venus alone, so zink runs on venus even on the Metal transport.
     guest
-        .ssh_exec(
+        .ssh_exec(&format!(
             "printf 'GALLIUM_DRIVER=zink\\nMESA_LOADER_DRIVER_OVERRIDE=zink\\n\
-             VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json\\n' | \
+             VK_DRIVER_FILES=%s\\n' {VENUS_ICD} | \
              sudo tee /etc/environment.d/99-fence-present-zink.conf >/dev/null && \
              sudo systemd-run --no-block sh -c \
-             'systemctl stop gdm; systemctl stop user@1000; systemctl start gdm'",
-        )
+             'systemctl stop gdm; systemctl stop user@1000; systemctl start gdm'"
+        ))
         .expect("flipping the session env to zink→venus");
     guest
         .ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))

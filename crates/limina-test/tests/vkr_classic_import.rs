@@ -35,6 +35,7 @@
 //! enhanced.test disk + KosmicKrisp; SKIPs cleanly if missing. Gated behind
 //! LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
+use limina_test::VENUS_ICD;
 use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
@@ -93,7 +94,7 @@ fn classic_virgl_gbm_buffer_imports_into_venus() {
         let out = guest
             .ssh_exec(&format!(
                 "MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu GALLIUM_DRIVER=virgl \
-                 VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
+                 VK_DRIVER_FILES={VENUS_ICD} \
                  timeout 120 python3 /tmp/vkclassicimport.py Venus {mode} 2>&1 || true"
             ))
             .expect("running vkclassicimport in the guest");

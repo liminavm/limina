@@ -25,6 +25,7 @@
 //! `spikes/trace-replay/capture-replay.sh`). Heavy: full seated desktop boot + a ~90 s
 //! venus replay (the known X11-present slowness; see the tier-2 ledger).
 
+use limina_test::VENUS_ICD;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -38,10 +39,12 @@ use limina_test::{Guest, GuestConfig};
 /// GL_RENDERER probe below is the guard that proves the env actually took. (The retired source-built
 /// dev-enh golden instead kept mesa under `/opt/mesa-zink` + its loader paths; see
 /// `images-staging-delete/README.md`.)
-const ZINK_ENV: &str = "MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink \
-     VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
-     VN_PERF=no_semaphore_feedback,no_fence_feedback,no_event_feedback,no_query_feedback \
-     VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1";
+const ZINK_ENV: &str = concat!(
+    "MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink VK_DRIVER_FILES=",
+    limina_test::venus_icd!(),
+    " VN_PERF=no_semaphore_feedback,no_fence_feedback,no_event_feedback,no_query_feedback \
+     VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1"
+);
 
 /// Per-frame tolerance: fraction of pixels allowed to differ by more than
 /// `CHANNEL_TOLERANCE` in any channel. Measured headroom is enormous: venus-vs-llvmpipe
@@ -505,8 +508,10 @@ fn venus_vk_replay_matches_lavapipe_reference() {
     // renderer check after it is what names a refusal.
     let probe = run_in_guest(
         &guest,
-        "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
-         vulkaninfo --summary 2>/dev/null | grep deviceName | head -1",
+        &format!(
+            "VK_DRIVER_FILES={VENUS_ICD} \
+             vulkaninfo --summary 2>/dev/null | grep deviceName | head -1"
+        ),
         PROBE_DEADLINE,
         "the venus enumeration probe",
         "vulkaninfo",
@@ -522,8 +527,12 @@ fn venus_vk_replay_matches_lavapipe_reference() {
         .expect("pushing the gfxr fixture into the guest");
 
     for (name, icd, extra) in [
-        ("venus", "virtio_icd.aarch64.json", ""),
-        ("lavapipe", "lvp_icd.aarch64.json", "--remove-unsupported"),
+        ("venus", VENUS_ICD, ""),
+        (
+            "lavapipe",
+            "/usr/share/vulkan/icd.d/lvp_icd.aarch64.json",
+            "--remove-unsupported",
+        ),
     ] {
         // gfxrecon-replay runs surfaceless over SSH (no reachable Wayland surface, so it auto-selects
         // VK_EXT_headless_surface) and never presents — the `present_surface -2` noise during this is
@@ -535,7 +544,7 @@ fn venus_vk_replay_matches_lavapipe_reference() {
             &guest,
             &format!(
                 "mkdir -p /tmp/vksnap-{name} && env {base} \
-                 VK_DRIVER_FILES=/usr/share/vulkan/icd.d/{icd} \
+                 VK_DRIVER_FILES={icd} \
                  /opt/gfxreconstruct/bin/gfxrecon-replay {extra} \
                  --screenshots 10,50,100,150,190 --screenshot-format png \
                  --screenshot-dir /tmp/vksnap-{name} /tmp/replay.gfxr 2>&1 \

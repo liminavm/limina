@@ -63,6 +63,22 @@ fn built_firmware() -> Result<PathBuf> {
 /// per-spawn counter follow it. Mirrors `crates/limina/src/launcher.rs`.
 pub const WORKER_JOB_PREFIX: &str = "eti.noronha.limina.worker.";
 
+/// The venus ICD a guest command pins Vulkan to, as a shell expression the guest's shell expands:
+/// limina's own venus where the guest has limina's GPU drivers, the distro's otherwise. Beside
+/// ours the distro's venus serves only a client that names it, so a pin to its path would test
+/// the distro's driver on an enhanced image. A macro, for `concat!` in a `const`; [`VENUS_ICD`]
+/// for a `format!` string.
+#[macro_export]
+macro_rules! venus_icd {
+    () => {
+        "$(for f in /etc/vulkan/icd.d/limina-venus.json \
+         /usr/share/vulkan/icd.d/virtio_icd.aarch64.json; do [ -e $f ] && echo $f && break; done)"
+    };
+}
+
+/// [`venus_icd!`] as a constant.
+pub const VENUS_ICD: &str = venus_icd!();
+
 /// The direct children of `pid` (empty when it has none, or is gone).
 pub fn child_pids(pid: libc::pid_t) -> Vec<libc::pid_t> {
     // Size, then fill; a child can appear in between, so leave headroom.
