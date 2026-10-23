@@ -203,15 +203,35 @@ pub struct MemPressure {
     #[n(8)]
     #[cbor(default)]
     pub io_full_avg60: u32,
+    /// `/proc/vmstat` `workingset_refault_file`, cumulative since boot, in guest pages: page
+    /// cache evicted and read back while still inside the workingset window. A cache too small
+    /// for what the guest re-reads drives it up; a reader that streams new data once does not.
+    /// The rate is the host's to compute. 0 when absent.
+    #[n(9)]
+    #[cbor(default)]
+    pub refault_file: u64,
+    /// The guest's page size in KiB, which the counters above are in. 0 when unknown.
+    #[n(10)]
+    #[cbor(default)]
+    pub page_kib: u32,
 }
 
 impl MemPressure {
-    /// Parse a snapshot from the raw `/proc/pressure/memory`, `/proc/pressure/io`, and
-    /// `/proc/meminfo` contents (the guest agent reads the files; this is the pure, host-testable
-    /// parser). PSI fields are 0 when the corresponding `pressure` text is empty (kernel `psi=0`
-    /// or unreadable file); MemAvailable/MemTotal/MemFree come from `meminfo`. Tolerant of missing
-    /// fields (default 0).
-    pub fn from_proc(pressure: &str, io_pressure: &str, meminfo: &str) -> MemPressure {
+    /// Parse a snapshot from the raw `/proc/pressure/memory`, `/proc/pressure/io`,
+    /// `/proc/meminfo` and `/proc/vmstat` contents (the guest agent reads the files, and the host
+    /// reads them over the stock guest agent; this is the pure, host-testable parser both share).
+    /// PSI fields are 0 when the corresponding `pressure` text is empty (kernel `psi=0`, or a
+    /// file the reader may not open); MemAvailable/MemTotal/MemFree come from `meminfo`, the
+    /// refault counter from `vmstat`. Tolerant of missing fields (default 0).
+    ///
+    /// The page size is not in any of them, but `MemFree` is `nr_free_pages` in KiB, so their
+    /// ratio names it — the same answer on the agent and on a host reading the files remotely.
+    pub fn from_proc(
+        pressure: &str,
+        io_pressure: &str,
+        meminfo: &str,
+        vmstat: &str,
+    ) -> MemPressure {
         // A PSI line: "some avg10=1.23 avg60=4.56 avg300=0.00 total=12345"; value is a percent.
         fn avg(line: &str, key: &str) -> u32 {
             line.split_whitespace()
@@ -241,6 +261,26 @@ impl MemPressure {
             .lines()
             .find(|l| l.starts_with("full"))
             .unwrap_or("");
+        // A vmstat line: "workingset_refault_file 12345".
+        let counter = |key: &str| -> u64 {
+            vmstat
+                .lines()
+                .find_map(|l| {
+                    let (k, v) = l.split_once(' ')?;
+                    (k == key).then(|| v.trim().parse().ok()).flatten()
+                })
+                .unwrap_or(0)
+        };
+        let mem_free_kib = kib(meminfo, "MemFree:");
+        // The two files are read moments apart, so the ratio is near a power of two, not on it.
+        let page_kib = match counter("nr_free_pages") {
+            0 => 0,
+            pages => (mem_free_kib as f64 / pages as f64)
+                .log2()
+                .round()
+                .clamp(2.0, 10.0)
+                .exp2() as u32,
+        };
         MemPressure {
             some_avg10: avg(some, "avg10"),
             some_avg60: avg(some, "avg60"),
@@ -248,9 +288,11 @@ impl MemPressure {
             full_avg60: avg(full, "avg60"),
             mem_available_kib: kib(meminfo, "MemAvailable:"),
             mem_total_kib: kib(meminfo, "MemTotal:"),
-            mem_free_kib: kib(meminfo, "MemFree:"),
+            mem_free_kib,
             io_full_avg10: avg(io_full, "avg10"),
             io_full_avg60: avg(io_full, "avg60"),
+            refault_file: counter("workingset_refault_file"),
+            page_kib: if mem_free_kib == 0 { 0 } else { page_kib },
         }
     }
 }
@@ -1045,6 +1087,8 @@ mod tests {
             mem_free_kib: 204800,
             io_full_avg10: 4400,
             io_full_avg60: 1200,
+            refault_file: 1 << 40,
+            page_kib: 16,
         };
         let (_, decoded) = round_trip(Message::MemPressure(mp));
         assert_eq!(decoded, Message::MemPressure(mp));
@@ -1058,7 +1102,7 @@ mod tests {
                            full avg10=44.00 avg60=12.34 avg300=0.00 total=10\n";
         let meminfo = "MemTotal:       6029312 kB\nMemFree:         123 kB\n\
                        MemAvailable:    5151232 kB\n";
-        let mp = MemPressure::from_proc(pressure, io_pressure, meminfo);
+        let mp = MemPressure::from_proc(pressure, io_pressure, meminfo, "");
         assert_eq!(mp.some_avg10, 123); // 1.23% -> 123 hundredths
         assert_eq!(mp.some_avg60, 456);
         assert_eq!(mp.full_avg10, 50);
@@ -1073,13 +1117,37 @@ mod tests {
     #[test]
     fn mem_pressure_psi_absent_keeps_meminfo() {
         // psi=0 kernel: /proc/pressure/{memory,io} missing -> empty; meminfo still parsed.
-        let mp = MemPressure::from_proc("", "", "MemTotal: 100 kB\nMemAvailable: 80 kB\n");
+        let mp = MemPressure::from_proc("", "", "MemTotal: 100 kB\nMemAvailable: 80 kB\n", "");
         assert_eq!(mp.some_avg10, 0);
         assert_eq!(mp.full_avg60, 0);
         assert_eq!(mp.io_full_avg10, 0);
         assert_eq!(mp.mem_available_kib, 80);
         assert_eq!(mp.mem_total_kib, 100);
         assert_eq!(mp.mem_free_kib, 0); // absent from meminfo -> 0 = "not reported"
+        assert_eq!(mp.refault_file, 0);
+        assert_eq!(mp.page_kib, 0);
+    }
+
+    /// The refault counter comes from vmstat, and the page size from MemFree over
+    /// `nr_free_pages` — read a moment apart, so a few pages of drift must not move it.
+    #[test]
+    fn mem_pressure_reads_refaults_and_the_page_size() {
+        let vmstat = "nr_free_pages 51200\nnr_zone_inactive_anon 3\n\
+                      workingset_refault_anon 7\nworkingset_refault_file 98765\n";
+        let at = |free_kib: u64| {
+            MemPressure::from_proc("", "", &format!("MemFree: {free_kib} kB\n"), vmstat)
+        };
+        let mp = at(51200 * 16);
+        assert_eq!(mp.refault_file, 98765);
+        assert_eq!(mp.page_kib, 16);
+        assert_eq!(at(51200 * 4 + 37 * 4).page_kib, 4);
+        assert_eq!(at(51200 * 16 - 90 * 16).page_kib, 16);
+        // No vmstat, or no MemFree to measure against: unknown, never a guess.
+        assert_eq!(
+            MemPressure::from_proc("", "", "MemFree: 4 kB\n", "").page_kib,
+            0
+        );
+        assert_eq!(MemPressure::from_proc("", "", "", vmstat).page_kib, 0);
     }
 
     #[test]
@@ -1380,6 +1448,8 @@ mod tests {
         assert_eq!(mp.mem_free_kib, 0);
         assert_eq!(mp.io_full_avg10, 0);
         assert_eq!(mp.io_full_avg60, 0);
+        assert_eq!(mp.refault_file, 0);
+        assert_eq!(mp.page_kib, 0);
     }
 
     /// New-agent → old-supervisor compat: a payload encoded WITH the new tail fields must
@@ -1412,6 +1482,8 @@ mod tests {
             mem_free_kib: 204800,
             io_full_avg10: 4400,
             io_full_avg60: 1200,
+            refault_file: 98765,
+            page_kib: 4,
         };
         let bytes = minicbor::to_vec(new).expect("encode new");
         let old: OldMemPressure =
