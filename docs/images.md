@@ -75,8 +75,8 @@ Two facts the table cannot show:
   (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) carry **`limina-agent` 0.6.2**
   and **`limina-agent-session` 0.1.4**, installed to `/usr/local/bin` with their units (payload
   **r39**, delivered 2026-10-23). The dogfood guest:
-  - is behind on `limina-agent`: 0.6.0, taken by hand on 2026-09-03 straight from 0.4.0 (its
-    first agent with the `vcpu` cap);
+  - is current on `limina-agent`: 0.6.2, the r39 binary installed by hand 2026-10-23, with 0.6.1
+    kept beside it as `limina-agent.0.6.1.bak`;
   - is current on `limina-agent-session`: 0.1.4, the r38 binary installed by hand 2026-10-22, with
     0.1.3, 0.1.2 and 0.1.1 kept beside it as `limina-agent-session.0.1.3.bak` / `.0.1.2.bak` /
     `.0.1.1.bak`.
