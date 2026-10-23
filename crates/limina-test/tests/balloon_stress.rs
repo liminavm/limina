@@ -10,8 +10,9 @@
 //! balloon over all of RAM, or the virtio-mem split (`LIMINA_VIRTIO_MEM=split`). Scenarios:
 //! - **burst**: with memory reclaimed, allocate `BURST_MIB` at a fixed rate. Does the policy give
 //!   memory back in time, or does the guest OOM-kill?
-//! - **cache**: re-read a file larger than the cache allowance. Does the policy stop squeezing, or
-//!   keep the guest thrashing (thrash is io pressure; memory pressure stays quiet)?
+//! - **cache**: let reclaim settle on an idle desktop, then re-read a cold file larger than what
+//!   that leaves the guest. Does the policy give memory back, or keep the guest thrashing (thrash
+//!   is io pressure; memory pressure stays quiet)?
 //! - **idle**: an idle desktop for `LIMINA_STRESS_IDLE_MIN` minutes (default 20). Does reclaim
 //!   settle, or keep reversing?
 //! - **host**: the host's level goes normal, warn, critical, normal (`LIMINA_HOST_PRESSURE=@file`).
@@ -41,10 +42,18 @@ const MIN_MIB: usize = 2048;
 const MAX_MIB: usize = 8192;
 /// The burst: most of what the policy may reclaim, so it cannot fit without a release.
 const BURST_MIB: u64 = 4096;
-/// The re-read working set, far above the ~1 GiB cache allowance and under RAM.
-const FILE_MIB: u64 = 3072;
+/// The re-read working set: more than a settled guest has available (~1.3 GiB at 2..8 GiB),
+/// and well under what a guest that gives memory back has.
+const FILE_MIB: u64 = 2048;
+/// Free disk the working set must leave the guest: a nearly full btrfs is its own io pressure.
+const DISK_SLACK_MIB: u64 = 1024;
+/// Reclaim has settled when what is held has not moved by more than this for [`SETTLE_QUIET`].
+const SETTLE_SLOP: u64 = 64 * MIB;
+const SETTLE_QUIET: Duration = Duration::from_secs(90);
+/// Idle reclaim on a 2..8 GiB desktop measured ~5 min from first step to last.
+const SETTLE_WITHIN: Duration = Duration::from_secs(600);
 const THRASH_SECS: u64 = 180;
-/// How much the policy must have reclaimed before a burst or cache point starts.
+/// How much the policy must have reclaimed before a burst starts.
 const RECLAIMED_FLOOR: u64 = 2048 * MIB;
 /// /var/tmp, not /tmp: Fedora's /tmp is tmpfs, whose pages are not reclaimable page cache.
 const THRASH_BIN: &str = "/var/tmp/limina-thrash.bin";
@@ -221,6 +230,26 @@ impl Run<'_> {
         self.host.last().map(HostSample::held).unwrap_or(0)
     }
 
+    /// Watch until what is held stops moving ([`SETTLE_QUIET`] within [`SETTLE_SLOP`]) or
+    /// [`SETTLE_WITHIN`] passes; returns what is held and whether it settled. On the stock tier
+    /// nothing is ever held, so this is one quiet period.
+    fn settle(&mut self) -> (u64, bool) {
+        let deadline = Instant::now() + SETTLE_WITHIN;
+        let (mut anchor, mut since) = (self.sample().held(), Instant::now());
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let held = self.sample().held();
+            if held.abs_diff(anchor) > SETTLE_SLOP {
+                (anchor, since) = (held, Instant::now());
+            } else if since.elapsed() >= SETTLE_QUIET {
+                return (held, true);
+            }
+            if Instant::now() >= deadline {
+                return (held, false);
+            }
+        }
+    }
+
     /// Collect the series, write them, and return the point's metrics with what `extra` makes
     /// of the guest samples and the decision trace appended.
     fn finish(
@@ -343,12 +372,27 @@ fn burst(bench: &BenchRun, p: &Point) -> String {
 
 fn cache(bench: &BenchRun, p: &Point) -> String {
     let mut run = Run::boot(bench, p);
+    let avail_mib: u64 = run
+        .guest
+        .ssh_exec("df --output=avail -m /var/tmp | tail -n1")
+        .expect("reading free disk")
+        .trim()
+        .parse()
+        .expect("df's avail column");
+    assert!(
+        avail_mib >= FILE_MIB + DISK_SLACK_MIB,
+        "{}: the guest disk has {avail_mib} MiB free, short of {FILE_MIB} MiB + {DISK_SLACK_MIB} MiB slack",
+        run.tag
+    );
+    // Written, then dropped from the cache: the policy settles on an idle desktop, not on the
+    // writer's dirty pages, and the loop starts cold.
     run.guest
         .ssh_exec(&format!(
-            "dd if=/dev/urandom of={THRASH_BIN} bs=1M count={FILE_MIB} status=none && sync && echo ok"
+            "dd if=/dev/urandom of={THRASH_BIN} bs=1M count={FILE_MIB} status=none && sync && \
+             echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null && echo ok"
         ))
         .expect("writing the working set");
-    let held_at_start = run.reclaim_first();
+    let (held_at_start, settled) = run.settle();
     run.guest
         .ssh_exec(&format!(
             "rm -f {THRASH_OUT}; setsid nohup bash -c 'while true; do cat {THRASH_BIN} > /dev/null; \
@@ -385,6 +429,7 @@ fn cache(bench: &BenchRun, p: &Point) -> String {
             .count();
         let mut extra = vec![
             ("held_at_start_mib", (held_at_start / MIB).to_string()),
+            ("settled", settled.to_string()),
             ("held_end_mib", (held_end / MIB).to_string()),
             ("passes", count.to_string()),
             ("pass_median_ms", all.to_string()),
