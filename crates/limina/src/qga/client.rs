@@ -48,6 +48,14 @@ pub const MEDIUM: Duration = Duration::from_secs(30);
 /// protects every other reply too.
 pub const WRITE_CHUNK: usize = 256 * 1024;
 
+/// Bytes asked for per `guest-file-read`. The agent's default is 4 KiB, which `/proc/vmstat`
+/// outgrew long ago; this takes the `/proc` files [`Qga::read_files`] exists for in one read.
+const READ_CHUNK: usize = 64 * 1024;
+
+/// The most [`Qga::read_files`] reads of any one file. These are small `/proc` snapshots; a
+/// file that keeps going past this is not one, and the guest does not get to grow our buffer.
+const READ_LIMIT: usize = 1024 * 1024;
+
 /// How long a write may block before we treat the agent as wedged. Same bound, and the same
 /// reason, as the vdagent broker: this runs on the shared `limina-timesync` thread, and a
 /// guest that stopped draining its port must not take the host's clock sync down with it.
@@ -259,6 +267,53 @@ impl Qga {
         );
         wrote.with_context(|| format!("writing {path} in the guest"))?;
         closed.map(|_| ()).context("closing the guest file")
+    }
+
+    /// Read each of `paths` in the guest, whole, as one snapshot.
+    ///
+    /// Takes the port only if it is free, like [`Self::time_sample`] and for the same reason: a
+    /// [`Self::fstrim`] holds it for minutes, and a pressure poll that queued behind one would
+    /// hand the policy a reading from minutes ago. The caller skips a beat instead.
+    ///
+    /// `Err` means nothing was asked — no agent, a busy or broken port. A file the agent could
+    /// not open or read is `None` in its slot, which is routine: Fedora's `virt_qemu_ga_t` may
+    /// not read `/proc/pressure/*`, and a `psi=0` kernel has no such files at all.
+    pub fn read_files(&self, paths: &[&str]) -> Result<Vec<Option<String>>> {
+        let mut conn = self
+            .conn
+            .try_lock()
+            .map_err(|_| anyhow!("the guest agent port is busy with a longer command"))?;
+        ensure_ready(&mut conn)?;
+        let mut out = Vec::with_capacity(paths.len());
+        for path in paths {
+            let Ok(handle) = exec(
+                &mut conn,
+                "guest-file-open",
+                Some(json!({ "path": path, "mode": "r" })),
+                FAST,
+            ) else {
+                // An error reply keeps the port in sync; a dead port fails the next file too.
+                out.push(None);
+                continue;
+            };
+            let Some(handle) = handle.as_i64() else {
+                bail!("guest-file-open did not return a handle for {path}");
+            };
+            let read = read_chunks(&mut conn, handle);
+            // Close whatever happened, for the reason `write_file` does.
+            let closed = exec(
+                &mut conn,
+                "guest-file-close",
+                Some(json!({ "handle": handle })),
+                FAST,
+            );
+            closed.context("closing the guest file")?;
+            out.push(
+                read.ok()
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+            );
+        }
+        Ok(out)
     }
 
     /// Run `path` with `args` in the guest, as root, and wait for it to exit.
@@ -503,6 +558,29 @@ fn write_chunks(conn: &mut Conn, handle: i64, bytes: &[u8]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Read an open handle to its end, one [`READ_CHUNK`] at a time, refusing past [`READ_LIMIT`].
+fn read_chunks(conn: &mut Conn, handle: i64) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    loop {
+        let ret = exec(
+            conn,
+            "guest-file-read",
+            Some(json!({ "handle": handle, "count": READ_CHUNK })),
+            FAST,
+        )?;
+        if let Some(b64) = ret.get("buf-b64").and_then(Value::as_str) {
+            bytes.extend(codec::b64_decode(b64).context("guest-file-read's buf-b64")?);
+        }
+        let count = ret.get("count").and_then(Value::as_u64).unwrap_or(0);
+        if count == 0 || ret.get("eof").and_then(Value::as_bool).unwrap_or(true) {
+            return Ok(bytes);
+        }
+        if bytes.len() > READ_LIMIT {
+            bail!("the guest file is larger than {READ_LIMIT} bytes");
+        }
+    }
 }
 
 /// The outcome of one [`Qga::fstrim`], flattened out of its per-path array.
@@ -1202,6 +1280,63 @@ mod tests {
         });
         let err = qga.write_file("/tmp/x", b"hello").unwrap_err().to_string();
         assert!(err.contains("writing /tmp/x"), "unexpected error: {err}");
+    }
+
+    /// A snapshot reads every file to its end in one hold of the port, closes each handle,
+    /// and leaves a file the agent would not open as `None` rather than failing the rest.
+    #[test]
+    fn a_snapshot_reads_each_file_whole_and_tolerates_a_refusal() {
+        use std::sync::{Arc, Mutex};
+        let vmstat: String = (0..300).map(|i| format!("counter_{i} {i}\n")).collect();
+        let body = vmstat.clone();
+        let open = Arc::new(Mutex::new(Vec::<i64>::new()));
+        let seen = open.clone();
+        let mut offset = 0usize;
+        let (qga, _h) = client_with(move |cmd, args| match cmd {
+            "guest-info" => Some(info_reply(&[
+                "guest-file-open",
+                "guest-file-read",
+                "guest-file-close",
+            ])),
+            "guest-file-open" => match args["path"].as_str().unwrap() {
+                "/proc/vmstat" => {
+                    assert_eq!(args["mode"], "r");
+                    seen.lock().unwrap().push(3);
+                    offset = 0;
+                    Some(json!({ "return": 3 }))
+                }
+                _ => Some(json!({ "error": { "class": "GenericError",
+                    "desc": "failed to open file '/proc/pressure/io' (mode: 'r'): Permission denied" } })),
+            },
+            "guest-file-read" => {
+                // Answer in small pieces, so the client must keep reading to the end.
+                let n = args["count"].as_u64().unwrap().min(1000) as usize;
+                let piece = &body.as_bytes()[offset..(offset + n).min(body.len())];
+                offset += piece.len();
+                Some(json!({ "return": {
+                    "count": piece.len(),
+                    "buf-b64": codec::b64_encode(piece),
+                    "eof": offset == body.len(),
+                } }))
+            }
+            "guest-file-close" => {
+                seen.lock()
+                    .unwrap()
+                    .retain(|&h| h != args["handle"].as_i64().unwrap());
+                Some(json!({ "return": {} }))
+            }
+            _ => None,
+        });
+        let got = qga
+            .read_files(&["/proc/vmstat", "/proc/pressure/io"])
+            .unwrap();
+        assert_eq!(got, vec![Some(vmstat), None]);
+        assert!(open.lock().unwrap().is_empty(), "a handle was left open");
+
+        // …and a busy port is a skipped beat, not a wait.
+        let _held = qga.conn.lock().unwrap();
+        let err = qga.read_files(&["/proc/vmstat"]).unwrap_err().to_string();
+        assert!(err.contains("busy"), "unexpected error: {err}");
     }
 
     /// `guest-exec` answers with a pid and nothing else; the outcome only exists once

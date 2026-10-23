@@ -260,6 +260,13 @@ struct Inner {
     /// normal error reply — and would otherwise be retried every tick forever. After
     /// [`QGA_VCPU_GIVE_UP`] in a row we stop asking this guest.
     qga_vcpu_failures: AtomicU64,
+    /// When the ENHANCED agent last sent a `MemPressure`: the memory twin of
+    /// `agent_cpu_report_at`, and what makes the QGA memory poll stand down.
+    agent_mem_report_at: Mutex<Option<Instant>>,
+    /// What the QGA memory poll last found it could read — `None` before its first reading. Only
+    /// a change is logged, so the log says once which signals a stock guest's policy runs on,
+    /// and again if a guest switched SELinux mode or lost its agent.
+    qga_mem_reads: Mutex<Option<QgaMemReads>>,
     /// M14 virtual FIDO authenticator: the per-VM passkey store, shared by every peer.
     /// `None` when this host has no Secure Enclave — then the `fido` capability is never
     /// advertised and a guest presents no authenticator (stock-degrade rule).
@@ -332,6 +339,8 @@ impl ControlPlane {
             last_cpu_target: Mutex::new(None),
             agent_cpu_report_at: Mutex::new(None),
             qga_vcpu_failures: AtomicU64::new(0),
+            agent_mem_report_at: Mutex::new(None),
+            qga_mem_reads: Mutex::new(None),
             fido_store,
             usb_fido_gadget,
             hello_timeout,
@@ -437,6 +446,8 @@ impl ControlPlane {
                     // The stock tier's dynamic-vCPU loop. No-op unless a policy is configured
                     // AND no limina-agent is reporting — see `qga_vcpu_tick`.
                     tsync_inner.qga_vcpu_tick();
+                    // ...and its dynamic-memory sibling, on the same terms (`qga_mem_tick`).
+                    tsync_inner.qga_mem_tick();
                     last_awake = std::time::SystemTime::now();
                 }
             })
@@ -938,6 +949,72 @@ impl Inner {
         }
     }
 
+    /// One tick of the stock tier's dynamic-memory sensor, over the stock `qemu-guest-agent`.
+    ///
+    /// The agent's `guest-file-*` verbs read the very files `limina-agent` reads, and
+    /// [`limina_proto::MemPressure::from_proc`] parses them the same way, so a guest with no
+    /// limina components feeds the same [`crate::balloon_policy::BalloonPolicy`] the enhanced
+    /// tier drives — polled every tick rather than pushed every second.
+    ///
+    /// What a stock guest can offer varies, and each piece lights up on its own:
+    /// - `/proc/meminfo` is the floor; without it there is no reading.
+    /// - `/proc/vmstat` brings the refault counter.
+    /// - `/proc/pressure/{memory,io}` (PSI) are read where the guest allows it: Debian, or a
+    ///   Fedora guest not Enforcing. Enforcing Fedora labels them `proc_psi_t` and gives
+    ///   `virt_qemu_ga_t` no read on that label, so there the policy runs with PSI absent —
+    ///   which it reads as calm, leaving the release paths that key on PSI to `MemAvailable`,
+    ///   `MemFree` and the refault rate. Every poll asks again, so a guest that drops to
+    ///   permissive is noticed on the next tick.
+    ///
+    /// A poll that cannot run — the port busy with a trim, no agent — simply feeds nothing: the
+    /// policy treats a missing report as no news, never as calm.
+    fn qga_mem_tick(&self) {
+        let Some(policy) = &self.balloon_policy else {
+            return;
+        };
+        if let Some(at) = *self.agent_mem_report_at.lock().unwrap()
+            && at.elapsed() < AGENT_CPU_FRESH
+        {
+            return;
+        }
+        let Some(qga) = self.qga.lock().unwrap().as_ref().map(|s| s.client.clone()) else {
+            return;
+        };
+        let files = match qga.read_files(&QGA_MEM_FILES) {
+            Ok(files) => files,
+            Err(e) => {
+                log::debug!("qga: no memory reading this tick ({e:#})");
+                return;
+            }
+        };
+        let [meminfo, vmstat, pressure, io_pressure] = files.as_slice() else {
+            return;
+        };
+        let reads = QgaMemReads {
+            meminfo: meminfo.is_some(),
+            vmstat: vmstat.is_some(),
+            psi: pressure.is_some() && io_pressure.is_some(),
+        };
+        if self.qga_mem_reads.lock().unwrap().replace(reads) != Some(reads) {
+            log::info!("qga: the stock guest's memory reading: {reads}");
+        }
+        let Some(meminfo) = meminfo else {
+            return;
+        };
+        let text = |f: &Option<String>| f.as_deref().unwrap_or_default().to_string();
+        let report = limina_proto::MemPressure::from_proc(
+            &text(pressure),
+            &text(io_pressure),
+            meminfo,
+            &text(vmstat),
+        );
+        if io_pressure.is_some() {
+            *self.guest_io_full_avg10.lock().unwrap() =
+                Some((Instant::now(), report.io_full_avg10));
+        }
+        policy.on_pressure(&report);
+    }
+
     /// One tick of the periodic guest trim (`crate::qga::trim`).
     ///
     /// Runs on the timesync thread, whose 2 s tick is far finer than the hours-long cadence —
@@ -1393,6 +1470,7 @@ fn serve_loop(
                 // policy is configured — the two consumers are independent.
                 *inner.guest_io_full_avg10.lock().unwrap() =
                     Some((Instant::now(), p.io_full_avg10));
+                *inner.agent_mem_report_at.lock().unwrap() = Some(Instant::now());
                 if let Some(policy) = &inner.balloon_policy {
                     policy.on_pressure(&p);
                 }
@@ -1509,6 +1587,42 @@ fn welcome_caps(has_fido_store: bool, usb_fido_gadget: bool, dynamic_vcpus: bool
 /// How recently the enhanced agent must have reported for the QGA poller to stand down. Agents
 /// report on their ~1s heartbeat tick, so this is several missed beats.
 const AGENT_CPU_FRESH: Duration = Duration::from_secs(5);
+
+/// What the QGA memory poll reads, in the order [`Inner::qga_mem_tick`] unpacks them.
+const QGA_MEM_FILES: [&str; 4] = [
+    "/proc/meminfo",
+    "/proc/vmstat",
+    "/proc/pressure/memory",
+    "/proc/pressure/io",
+];
+
+/// Which of [`QGA_MEM_FILES`] the stock guest let the agent read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QgaMemReads {
+    meminfo: bool,
+    vmstat: bool,
+    psi: bool,
+}
+
+impl std::fmt::Display for QgaMemReads {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let says = |ok: bool| if ok { "read" } else { "unreadable" };
+        write!(
+            f,
+            "meminfo {}, vmstat {}, PSI {}",
+            says(self.meminfo),
+            says(self.vmstat),
+            says(self.psi)
+        )?;
+        if self.meminfo && !self.psi {
+            write!(f, " — the balloon policy runs without PSI")?;
+        }
+        if !self.meminfo {
+            write!(f, " — no reading, so no stock-tier dynamic memory")?;
+        }
+        Ok(())
+    }
+}
 
 /// Consecutive QGA vCPU failures before we stop asking this guest. Fedora's `virt_qemu_ga_t`
 /// domain is the real gate on what the stock agent may do, and a domain denial is not something
