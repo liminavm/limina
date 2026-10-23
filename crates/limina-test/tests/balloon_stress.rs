@@ -2,9 +2,10 @@
 // Copyright © 2026 Gustavo Noronha Silva
 
 //! Dynamic-memory stress on a **windowed, seated desktop**: the shape users run, with nothing
-//! played by the harness. On the enhanced tier the guest's own limina-agent reports pressure and
-//! the policy acts on it; on the stock tier there is no agent, the policy never runs, and what is
-//! measured is that nothing breaks (`docs/design/balloon-bench.md`, `docs/design/guest-ram-objects.md`).
+//! played by the harness. On the enhanced tier the guest's own limina-agent reports pressure; on
+//! the stock tier the host reads the same files through the stock qemu-guest-agent, without PSI
+//! on an Enforcing Fedora guest. Either way the policy acts on what it is told
+//! (`docs/design/balloon-bench.md`, `docs/design/guest-ram-objects.md`).
 //!
 //! Each point is one fresh boot of `MIN_MIB..MAX_MIB` with one reclaim mode, on one backend: the
 //! balloon over all of RAM, or the virtio-mem split (`LIMINA_VIRTIO_MEM=split`). Scenarios:
@@ -34,7 +35,7 @@ use std::time::{Duration, Instant};
 
 use limina_test::Guest;
 use limina_test::bench::{
-    BenchRun, BurstStatus, GuestSample, GuestSampler, HostSample, Tier, TraceEvent, burst_status,
+    BenchRun, BurstStatus, GuestSample, GuestSampler, HostSample, TraceEvent, burst_status,
     count_oom_since, counter_delta, fetch_balloon_journal, first_target_decrease_after,
     guest_epoch_secs, json_object, kill_burst, now_ms, parse_trace, psi_integral_pct_s,
     sample_host, start_burst, target_reversals, tier, tier_config, verify_tier,
@@ -228,18 +229,15 @@ impl Run<'_> {
         }
     }
 
-    /// Wait for the policy to reclaim [`RECLAIMED_FLOOR`]. Only the enhanced tier's agent can
-    /// make it; returns what is held when the wait ends.
+    /// Wait for the policy to reclaim [`RECLAIMED_FLOOR`]; returns what is held when the wait
+    /// ends.
     fn reclaim_first(&mut self) -> u64 {
-        if tier() == Tier::Enhanced {
-            self.watch_until(Duration::from_secs(300), |s| s.held() >= RECLAIMED_FLOOR);
-        }
+        self.watch_until(Duration::from_secs(300), |s| s.held() >= RECLAIMED_FLOOR);
         self.host.last().map(HostSample::held).unwrap_or(0)
     }
 
     /// Watch until what is held stops moving ([`SETTLE_QUIET`] within [`SETTLE_SLOP`]) or
-    /// [`SETTLE_WITHIN`] passes; returns what is held and whether it settled. On the stock tier
-    /// nothing is ever held, so this is one quiet period.
+    /// [`SETTLE_WITHIN`] passes; returns what is held and whether it settled.
     fn settle(&mut self) -> (u64, bool) {
         let deadline = Instant::now() + SETTLE_WITHIN;
         let (mut anchor, mut since) = (self.sample().held(), Instant::now());
