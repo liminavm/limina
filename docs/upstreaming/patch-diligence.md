@@ -10,7 +10,7 @@ The output is a reproducer README holding the evidence and the points the MR des
 needs, a standalone branch whose tree is exactly what was tested, a test in the component's own
 test suite where one can express the bug (§7), and an updated ledger row.
 Filing stays with the user: agents never post, and Mesa's AI policy wants the commit message,
-code comments and MR text in the submitter's own words (`ledger/mesa.md`).
+code comments and MR text in the submitter's own words (`ledger/kosmickrisp-guest.md`).
 
 ## 1. Reproduce on the upstream stack
 

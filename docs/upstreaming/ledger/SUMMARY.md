@@ -21,14 +21,13 @@ re-derives the commit counts.
 |---|---|---|---|
 | linux | 2 | `v7.1.13` (`gregkh/linux` stable mirror) | lore.kernel.org |
 | kosmickrisp (host KK, `limina-kk`) | 131 | mesa main `d44453ce` | gitlab.fd.o (Anubis) |
-| kosmickrisp-guest (`metal-native-context`) | 9 | `limina-kk` pin `059715d2` | gitlab.fd.o (Anubis) |
-| mesa (guest venus, `limina-guest`) | 23 | `mesa-26.2.5` | gitlab.fd.o (Anubis) |
+| kosmickrisp-guest (`metal-native-context`; KK bridge + guest venus/virgl/zink fixes) | 31 | `limina-kk` pin `059715d2` | gitlab.fd.o (Anubis) |
 | imago | 1 | `6258f51` | gitlab.com |
 | mutter | RETIRED | — | series removed 2026-08-03 (own compositor) |
 | virglrenderer (C; pinned by virglrs) | 181 C-tree (616 with the Rust rewrite) | upstream main `aafa9bd2` | gitlab.fd.o (Anubis) |
 | libkrun | 341 | `dc1a18ad` | github.com/libkrun/libkrun |
 | mlx | 2 | `ml-explore/mlx` main `b6642e6` | github.com/ml-explore/mlx |
-| **total** | **690** | | |
+| **total** | **689** | | |
 
 **Superseded since 2026-08-03 (verified 2026-10-16; per-series detail in each file):**
 
@@ -40,7 +39,8 @@ re-derives the commit counts.
   carries the !43421 superset. Upstream KK already advertises `VK_EXT_external_memory_metal`
   (MTLHEAP), so the MTLHEAP work item below is done upstream; only our MTLTEXTURE handle type is
   extra.
-- mesa 0004 (venus TLS teardown) is in 26.2.5 via `133e1af39ce`.
+- venus TLS teardown, the venus SYNC_FD fix and the zink shadow-recursion fix are in the
+  `kosmickrisp-guest` base; upstream fixed the zink lost-wakeup deadlock differently.
 - The virglrenderer `vulkan_metal.h` fixlet was fixed upstream as `aafa9bd2`, which is now the
   base.
 - imago: the discard-truncate patch was fixed upstream in 0.2.5. The one remaining patch, the
@@ -96,10 +96,11 @@ Ranked roughly by blast radius / reviewer-readiness. None are blocked on disclos
   **0041** (macOS blob unmap balance), **0031** (display -2 enum arm), **0122** (EDID digital),
   **0119**-generator-subset (aspect shift + u16 clock wrap), **0027** (de-shear, strip DIAG),
   **0008**+**0015** (cursor depanic), **0061**-carve (KEY_POWER not KEY_RESTART).
-- mesa (guest): eight MRs ready on branch `upstream/guest-2026-10`, each with a reproducer run on
-  an upstream stack (`spikes/upstream-repro/`) — venus TLS-destructor pin, venus sync_count, zink
-  shadow recursion, EGL fd-export failure, zink lost-wakeup, venus stub-instance fallback, virgl
-  three-plane decode targets, vl/compositor RGB→YUV matrix. Order and the held rows: `mesa.md`.
+- kosmickrisp-guest (guest venus/virgl/zink rows): MRs ready on branch `upstream/guest-2026-10`,
+  each with a reproducer run on an upstream stack (`spikes/upstream-repro/`) — zink shadow
+  populate fixes, EGL fd-export failure, venus stub-instance fallback, virgl three-plane decode
+  targets, vl/compositor RGB→YUV matrix, virgl PBO wait. Order and the held rows:
+  `kosmickrisp-guest.md`.
   Outside the guest series: fbobject NULL guard, the zink optional-extension guards, and the zink
   pipeline re-lookup (`limina-kk`).
 - KK: **0009** (vk_meta empty rects — broad audience), the monolith's **dm nil-check** and

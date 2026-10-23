@@ -20,7 +20,7 @@ SPDX-License-Identifier = "GPL-2.0-only"
 
 # Patches against Mesa (MIT) — our authorship, Mesa's license.
 [[annotations]]
-path = ["patches/mesa-guest/**", "spikes/venus-draw-probe/kk-patches/**"]
+path = "spikes/venus-draw-probe/kk-patches/**"
 precedence = "override"
 SPDX-FileCopyrightText = ["2026 Gustavo Noronha Silva", "The Mesa contributors"]
 SPDX-License-Identifier = "MIT"

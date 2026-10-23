@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Copyright © 2026 Gustavo Noronha Silva
 //
-// VK_LAYER_LIMINA_transport_select: when the Metal transport's Vulkan driver (KosmicKrisp on the
-// limina bridge) enumerates a device, hide venus's devices from the application.
+// VK_LAYER_LIMINA_transport_select: show the application one device per host GPU, limina's own.
 //
-// Both drivers drive the same host GPU, so a guest on the transport shows two devices for one GPU,
-// and the loader lists venus's first: an application taking the first device, as most do, would
-// never reach the transport. Without the transport KosmicKrisp enumerates nothing and this layer
-// changes nothing, so venus stays the guest's Vulkan device. An application that names its driver
-// with VK_DRIVER_FILES sees only that driver and is left alone too.
+// Up to three drivers enumerate the same host GPU: the Metal transport's (KosmicKrisp on the
+// limina bridge), limina's venus, and the system Mesa's venus. When the transport's driver
+// enumerates a device, every venus device is hidden; otherwise, when limina's venus does (it marks
+// its driverInfo "(limina)"), the system's venus is. An application taking the first device, as
+// most do, so reaches the best driver the guest has. Where only the system's venus enumerates,
+// this layer changes nothing. An application that names its driver with VK_DRIVER_FILES sees
+// only that driver and is left alone too.
 //
 // Implicit, installed by guest/gpu-drivers/install.sh. LIMINA_VK_ALL_DEVICES=1 disables it.
 
@@ -76,7 +77,7 @@ find_device(const void *handle)
    return d;
 }
 
-enum kind { OTHER, VENUS, KOSMICKRISP };
+enum kind { OTHER, VENUS, LIMINA_VENUS, KOSMICKRISP };
 
 static enum kind
 kind_of(struct instance *inst, VkPhysicalDevice pd)
@@ -91,21 +92,36 @@ kind_of(struct instance *inst, VkPhysicalDevice pd)
       };
       inst->properties2(pd, &props);
       if (driver.driverID == VK_DRIVER_ID_MESA_VENUS)
-         return VENUS;
+         return strstr(driver.driverInfo, "(limina)") ? LIMINA_VENUS : VENUS;
       if (driver.driverID == VK_DRIVER_ID_MESA_KOSMICKRISP)
          return KOSMICKRISP;
       if (driver.driverID != 0)
          return OTHER;
    }
-   /* A 1.0 instance without the properties2 path: venus says who it is in the device name. */
+   /* A 1.0 instance without the properties2 path: venus says who it is in the device name, but
+    * not whose it is, so nothing is hidden. */
    VkPhysicalDeviceProperties props;
    inst->properties(pd, &props);
    return strncmp(props.deviceName, "Virtio-GPU Venus", 16) == 0 ? VENUS : OTHER;
 }
 
-/* Every physical device the drivers below enumerate, and how many of them this layer hides. */
+/* Which devices this layer hides: every venus behind the transport, the system's behind ours. */
+struct policy {
+   bool transport;
+   bool limina_venus;
+};
+
+static bool
+hidden(const struct policy *p, enum kind k)
+{
+   if (p->transport)
+      return k == VENUS || k == LIMINA_VENUS;
+   return p->limina_venus && k == VENUS;
+}
+
+/* Every physical device the drivers below enumerate, and what this layer hides of them. */
 static VkResult
-all_devices(struct instance *inst, VkPhysicalDevice **out, uint32_t *count, bool *hide_venus)
+all_devices(struct instance *inst, VkPhysicalDevice **out, uint32_t *count, struct policy *policy)
 {
    uint32_t n = 0;
    VkResult r = inst->enumerate(inst->handle, &n, NULL);
@@ -119,12 +135,14 @@ all_devices(struct instance *inst, VkPhysicalDevice **out, uint32_t *count, bool
       free(all);
       return r;
    }
-   bool transport = false;
-   for (uint32_t i = 0; i < n; i++)
-      transport |= kind_of(inst, all[i]) == KOSMICKRISP;
+   *policy = (struct policy){0};
+   for (uint32_t i = 0; i < n; i++) {
+      enum kind k = kind_of(inst, all[i]);
+      policy->transport |= k == KOSMICKRISP;
+      policy->limina_venus |= k == LIMINA_VENUS;
+   }
    *out = all;
    *count = n;
-   *hide_venus = transport;
    return VK_SUCCESS;
 }
 
@@ -134,13 +152,13 @@ EnumeratePhysicalDevices(VkInstance instance, uint32_t *count, VkPhysicalDevice 
    struct instance *inst = find_instance(instance);
    VkPhysicalDevice *all;
    uint32_t n;
-   bool hide;
-   VkResult r = all_devices(inst, &all, &n, &hide);
+   struct policy policy;
+   VkResult r = all_devices(inst, &all, &n, &policy);
    if (r != VK_SUCCESS)
       return r;
    uint32_t kept = 0;
    for (uint32_t i = 0; i < n; i++) {
-      if (hide && kind_of(inst, all[i]) == VENUS)
+      if (hidden(&policy, kind_of(inst, all[i])))
          continue;
       all[kept++] = all[i];
    }
@@ -163,12 +181,12 @@ EnumeratePhysicalDeviceGroups(VkInstance instance, uint32_t *count,
    struct instance *inst = find_instance(instance);
    VkPhysicalDevice *all;
    uint32_t n;
-   bool hide;
-   VkResult r = all_devices(inst, &all, &n, &hide);
+   struct policy policy;
+   VkResult r = all_devices(inst, &all, &n, &policy);
    free(all);
    if (r != VK_SUCCESS)
       return r;
-   if (!hide)
+   if (!policy.transport && !policy.limina_venus)
       return inst->enumerate_groups(instance, count, groups);
 
    uint32_t ng = 0;
@@ -185,10 +203,10 @@ EnumeratePhysicalDeviceGroups(VkInstance instance, uint32_t *count,
       free(g);
       return r;
    }
-   /* A group is venus's when its devices are; groups never mix drivers. */
+   /* A group is a driver's when its devices are; groups never mix drivers. */
    uint32_t kept = 0;
    for (uint32_t i = 0; i < ng; i++) {
-      if (g[i].physicalDeviceCount && kind_of(inst, g[i].physicalDevices[0]) == VENUS)
+      if (g[i].physicalDeviceCount && hidden(&policy, kind_of(inst, g[i].physicalDevices[0])))
          continue;
       g[kept++] = g[i];
    }

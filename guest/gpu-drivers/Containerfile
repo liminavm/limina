@@ -19,7 +19,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxrandr-dev libxxf86vm-dev \
       libxshmfence-dev libxcb1-dev libxcb-glx0-dev libxcb-shm0-dev libxcb-dri3-dev \
       libxcb-present-dev libxcb-sync-dev libxcb-randr0-dev libxcb-xfixes0-dev libxcb-keysyms1-dev \
-      libexpat1-dev libzstd-dev zlib1g-dev libudev-dev \
+      libexpat1-dev libzstd-dev zlib1g-dev libudev-dev libva-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Mesa needs meson >= 1.4; Ubuntu 24.04 ships 1.3.

@@ -57,31 +57,18 @@ rev = "3d7a8fe42442caf5ac6c58be8ce727d7b3150523"
 base = "d44453ce07ba5e1e6b71f7960809c38f2526c1cd"
 tree = "/Volumes/mesa-cs/mesa"
 
-# The GUEST KosmicKrisp on the native-context transport (the limina bridge), with the guest-side
-# WSI it needs: the host KK branch plus guest-only commits. Built by spikes/kk-on-wire/kk-build.sh
-# from `tree` and installed by scripts/provision/deliver-metal-transport.sh. NOT vendored, for the
-# same reason as [kosmickrisp].
+# limina's guest GPU drivers (the vendor build, -Dlimina-vendor=true): KosmicKrisp on the
+# native-context transport (the limina bridge) with the guest-side WSI it needs, plus venus, virgl
+# and the VA-API driver with our guest fixes — the host KK branch plus guest-only commits. Built
+# by scripts/build-gpu-drivers.sh from `tree` and installed into a guest by
+# guest/gpu-drivers/install.sh. NOT vendored, for the same reason as [kosmickrisp].
 [kosmickrisp-guest]
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "metal-native-context"
-rev = "340ed84bf1ba1c2706dc3279fdcf148f24526309"
+rev = "23a28823ed4bd7c381a32e6fba869d33064fce71"
 base = "059715d2aa534b74fee59aec6fae316f026d0627"
 tree = "/Volumes/mesa-cs/mesa-metal-guest"
-
-# The GUEST venus Mesa (task #11 — same liminavm/mesa repo, its own branch). NOT vendored by
-# `cargo xtask vendor`: the working checkout is a worktree at /Volumes/mesa-cs/mesa-guest (same
-# case-sensitive image as the KK tree). Consumed as an EXPORTED SERIES by the F44 RPM build —
-# `scripts/export-mesa-guest-patches.sh` derives patches/mesa-guest/ (a committed artifact) from
-# base..rev, and scripts/provision/f44/build-mesa-rpm.sh applies it via the spec inside the
-# build guest (which has no access to this checkout).
-[mesa-guest]
-repo = "https://github.com/liminavm/mesa.git"
-upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
-branch = "limina-guest"
-rev = "0642e0178cecf448401b86258b39218d5433d791"
-base = "mesa-26.2.5"
-tree = "/Volumes/mesa-cs/mesa-guest"
 
 # The host GPU renderer, consumed by rutabaga as a Rust crate — nothing here is loaded at
 # runtime any more, so this pin decides what the worker *is*, not what it finds. Ours outright,

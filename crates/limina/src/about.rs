@@ -298,7 +298,7 @@ mod tests {
             !info
                 .deps
                 .iter()
-                .any(|d| d.name == "mesa-guest" || d.name == "linux"),
+                .any(|d| d.name == "kosmickrisp-guest" || d.name == "linux"),
             "guest components in the host build stamp"
         );
     }

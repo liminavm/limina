@@ -96,7 +96,7 @@ check "absent local file: no override"      "" "$(pin_override libkrun source)"
 
 # The real manifest still parses the way its consumers expect.
 LIMINA_MANIFEST="$REPO/third_party/manifest.toml"
-check "real manifest: mesa-guest tree"      /Volumes/mesa-cs/mesa-guest "$(pin mesa-guest tree)"
+check "real manifest: guest drivers tree"  /Volumes/mesa-cs/mesa-metal-guest "$(pin kosmickrisp-guest tree)"
 check "real manifest: linux is heavy"       true "$(pin linux heavy)"
 [ -n "$(pin cardea rev)" ] && check "real manifest: cardea rev present" 1 1 \
     || check "real manifest: cardea rev present" nonempty ""

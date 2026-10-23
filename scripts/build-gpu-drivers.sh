@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
-# Build limina's guest GPU vendor drivers, once, for every distro: KosmicKrisp on the limina
-# bridge (Vulkan) and zink over it as a glvnd EGL vendor plus a GBM backend, from the
-# [kosmickrisp-guest] Mesa with -Dlimina-vendor=true (docs/design/metal-transport-delivery.md §1).
+# Build limina's guest GPU vendor drivers, once, for every distro, from the [kosmickrisp-guest] Mesa
+# with -Dlimina-vendor=true (docs/design/metal-transport-delivery.md §1). They drive every
+# virtio-gpu: KosmicKrisp on the limina bridge and venus for Vulkan; zink over KosmicKrisp on a
+# limina transport, virgl elsewhere, for GL, as a glvnd EGL vendor plus a GBM backend; and virgl's
+# VA-API driver with the H.264/HEVC decoders a distro Mesa leaves out.
 #
 # Everything lands under /opt/limina/<wire version>/, the protocol the drivers speak to the host,
-# so drivers for several hosts can sit side by side and each declines a host it does not speak
-# to. Nothing is installed into the system's own paths here: the installer links the vendor
-# files into them.
+# so drivers for several hosts can sit side by side. Nothing is installed into the system's own
+# paths here: the installer links the vendor files into them.
 #
 # Portability comes from the build base (guest/gpu-drivers/Containerfile: the oldest glibc we
 # support) and from linking the C++ runtime statically. The build refuses an artifact that needs a
@@ -33,6 +34,10 @@ WIRE="$(sed -n 's/^#define LMN_WIRE_VERSION \([0-9]*\)u$/\1/p' \
 [ -n "$WIRE" ] || { echo "no LMN_WIRE_VERSION in $TREE" >&2; exit 1; }
 PREFIX="/opt/limina/$WIRE"
 
+# venus's protocol is a meson subproject, fetched on first use: into the tree, from here, since the
+# build mounts the tree read-only.
+(cd "$TREE" && meson subprojects download venus-protocol >/dev/null)
+
 if ! container image inspect "$IMAGE" >/dev/null 2>&1; then
   container build -t "$IMAGE" -f "$ROOT/guest/gpu-drivers/Containerfile" "$ROOT/guest/gpu-drivers"
 fi
@@ -51,15 +56,16 @@ echo '$PREFIX' > /build/vendor.prefix
 if [ ! -f /build/vendor/build.ninja ]; then
   meson setup /build/vendor /src --prefix=$PREFIX --libdir=lib \
     -Dlimina-vendor=true \
-    -Dvulkan-drivers=kosmickrisp -Dkosmickrisp-bridge=limina \
-    -Dgallium-drivers=zink -Dllvm=enabled -Ddraw-use-llvm=false \
+    -Dvulkan-drivers=kosmickrisp,virtio -Dkosmickrisp-bridge=limina \
+    -Dgallium-drivers=zink,virgl -Dllvm=enabled -Ddraw-use-llvm=false \
+    -Dgallium-va=enabled -Dvideo-codecs=all_free,h264dec,h265dec \
     -Dplatforms=x11,wayland -Degl=enabled -Dgbm=enabled -Dglx=disabled \
     -Dopengl=true -Dgles1=disabled -Dgles2=enabled \
     -Dglvnd=enabled -Dglvnd-vendor-name=limina \
     -Dbuildtype=debugoptimized -Db_ndebug=true \
     -Dcpp_link_args=-static-libstdc++ \
     -Dlmsensors=disabled -Dlibunwind=disabled -Dvalgrind=disabled \
-    -Dvideo-codecs= -Dtools= -Dvulkan-layers= -Dbuild-tests=false \
+    -Dtools= -Dvulkan-layers= -Dbuild-tests=false \
     > /build/meson.log 2>&1 || { tail -n 40 /build/meson.log; exit 1; }
 fi
 ninja -C /build/vendor > /build/ninja.log 2>&1 || {
@@ -69,7 +75,8 @@ DESTDIR=/tmp/stage ninja -C /build/vendor install > /build/install.log 2>&1
 cd /tmp/stage$PREFIX
 # What only a system Mesa's own users need: GBM stays the system's (one libgbm per process, which
 # loads our backend), the dri/ stubs serve an X server's GLX loader, and nothing builds against us.
-rm -rf include lib/pkgconfig lib/dri lib/libgbm.so*
+# lib/dri keeps the VA-API driver, a link into libgallium, which libva finds there.
+rm -rf include lib/pkgconfig lib/libgbm.so* lib/dri/*_dri.so
 # The private libgallium sits beside the libraries that need it.
 patchelf --set-rpath '\$ORIGIN' lib/libEGL_limina.so.0.0.0
 patchelf --set-rpath '\$ORIGIN/..' lib/gbm/dri_gbm.so
@@ -85,7 +92,7 @@ container run --rm -v "$OUT:/out" "$IMAGE" bash -euo pipefail -c "
 cd /out/opt/limina/$WIRE
 # What a vendor tree may need from the system: glibc, and the window-system and DRM libraries
 # every desktop distro ships with a stable soname. Anything else is a library some distro lacks.
-allowed='^(libc|libm|libdl|libpthread|librt|libgcc_s|ld-linux-aarch64)\\.so|^lib(drm|expat|z|zstd|udev|wayland-client|wayland-server|xcb[a-z0-9-]*|X11|X11-xcb|Xext|Xfixes|Xrandr|Xxf86vm|xshmfence|gbm|vulkan|GLdispatch|EGL)\\.so|^libgallium-.*\\.so\$'
+allowed='^(libc|libm|libdl|libpthread|librt|libgcc_s|ld-linux-aarch64)\\.so|^lib(drm|expat|z|zstd|udev|wayland-client|wayland-server|xcb[a-z0-9-]*|X11|X11-xcb|Xext|Xfixes|Xrandr|Xxf86vm|xshmfence|gbm|vulkan|GLdispatch|EGL|va|va-drm|va-x11|va-wayland)\\.so|^libgallium-.*\\.so\$'
 bad=0
 for f in \$(find . -name '*.so*' -type f); do
   glibc=\$(objdump -T \$f | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)
@@ -111,7 +118,7 @@ cat > "$D/share/vulkan/implicit_layer.d/limina-$WIRE-transport-select.json" <<JS
 {"file_format_version":"1.0.0","layer":{"name":"VK_LAYER_LIMINA_transport_select_$WIRE",
 "type":"GLOBAL","library_path":"$PREFIX/lib/libVkLayer_limina_transport_select.so",
 "api_version":"1.4.0","implementation_version":"1",
-"description":"Hides venus's devices where the Metal transport's driver has one",
+"description":"Hides the devices limina's own drivers stand in for",
 "disable_environment":{"LIMINA_VK_ALL_DEVICES":"1"}}}
 JSON
 echo "$WIRE" > "$D/WIRE_VERSION"

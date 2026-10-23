@@ -8,10 +8,15 @@
 #   sudo ./install.sh              install, or upgrade in place
 #   sudo ./install.sh --uninstall  remove everything this installed
 #
-# Nothing here selects a driver with the environment. Each driver is found where the system's own
-# loaders look (glvnd's vendor directory, the Vulkan loader's ICD directory, libgbm's backend
-# directory) and declines a device that is not a limina transport speaking its protocol, so a
-# guest without the transport, or on a host that speaks another protocol, keeps its stock drivers.
+# The drivers drive every virtio-gpu, in place of the system Mesa's: zink on KosmicKrisp over a
+# limina transport, virgl elsewhere, for GL; KosmicKrisp and venus for Vulkan; virgl for video.
+# Each is found where the system's own loaders look (glvnd's vendor directory, the Vulkan loader's
+# ICD directory, libgbm's backend directory) and a Vulkan layer hides the system's venus device
+# behind ours. Only libva has no such directory: LIBVA_DRIVERS_PATH, set in environment.d, puts
+# ours ahead of the system's. GLX clients and Flatpaks keep the system's drivers.
+#
+# Only the newest protocol's tree drives virgl, venus and video; an older tree beside it serves
+# just its own transport's Vulkan.
 #
 # What the distro differs in is confined to two places: the package names the prerequisites go by
 # (need_packages) and the tool that rebuilds the initramfs (rebuild_initramfs). Everything this
@@ -152,7 +157,9 @@ uninstall() {
       link) [ -L "$what" ] && rm -f "$what" ;;
       tree) rm -rf "$what" ;;
       dkms) dkms remove "$what" --all || true; rm -rf "/usr/src/${what/\//-}" ;;
-      envfile) [ -f "$(original "$what")" ] && mv -f "$(original "$what")" "$what" ;;
+      # A manifest from before the drivers stopped editing the environment. A file removed since
+      # was removed on purpose (install-enhanced.sh retires the enhanced tier's): it stays gone.
+      envfile) [ -f "$what" ] && [ -f "$(original "$what")" ] && mv -f "$(original "$what")" "$what" ;;
       file) rm -f "$what" ;;
     esac
   done < "$STATE/manifest"
@@ -197,33 +204,46 @@ for tree in "$HERE"/drivers/opt/limina/*/; do
   rm -rf "/opt/limina/$wire"
   mv "/opt/limina/$wire.new" "/opt/limina/$wire"
   record "tree /opt/limina/$wire"
-  link "/opt/limina/$wire/share/glvnd/egl_vendor.d/10_limina-$wire.json" \
-    "/etc/glvnd/egl_vendor.d/10_limina-$wire.json"
   link "/opt/limina/$wire/share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json" \
     "/etc/vulkan/icd.d/limina-$wire.json"
-  link "/opt/limina/$wire/share/vulkan/implicit_layer.d/limina-$wire-transport-select.json" \
-    "/etc/vulkan/implicit_layer.d/limina-$wire-transport-select.json"
 done
 command -v restorecon >/dev/null && restorecon -R /opt/limina || true
 
-# libgbm loads one backend per DRM driver name, so the newest protocol's takes the name.
+# What a guest has one of: the newest protocol's takes it. libgbm loads one backend per DRM driver
+# name, and glvnd asks its vendors in turn, the first that takes a display keeping it.
 newest="$(ls /opt/limina | sort -n | tail -n 1)"
+N="/opt/limina/$newest"
+link "$N/share/glvnd/egl_vendor.d/10_limina-$newest.json" /etc/glvnd/egl_vendor.d/10_limina.json
+# A wire-independent name, for a client that names its Vulkan drivers.
+link "$N/share/vulkan/icd.d/virtio_icd.aarch64.json" /etc/vulkan/icd.d/limina-venus.json
+link "$N/share/vulkan/implicit_layer.d/limina-$newest-transport-select.json" \
+  /etc/vulkan/implicit_layer.d/limina-transport-select.json
 if gbmdir="$(gbm_backend_dir)"; then
-  link "/opt/limina/$newest/lib/gbm/dri_gbm.so" "$gbmdir/virtio_gpu_gbm.so"
+  link "$N/lib/gbm/dri_gbm.so" "$gbmdir/virtio_gpu_gbm.so"
 else
   say "no libgbm on this system: the compositor keeps its stock driver"
 fi
 
-# A Vulkan driver list pinned in the environment (the enhanced tier's venus pin) would hide ours
-# from every client and from zink itself; ours joins it rather than replacing it.
-for f in /etc/environment.d/*.conf /etc/environment; do
-  [ -f "$f" ] && grep -q '^VK_DRIVER_FILES=' "$f" || continue
-  mkdir -p "$STATE/originals"
-  cp -p "$f" "$(original "$f")"
-  icds="$(ls /etc/vulkan/icd.d/limina-*.json | tr '\n' ':')"
-  sed -i "s|^VK_DRIVER_FILES=|VK_DRIVER_FILES=${icds}|" "$f"
-  record "envfile $f"
-  say "added the limina ICDs to the Vulkan driver list in $f"
+# libva searches one path list, which only the environment sets. The system's own directories
+# follow ours, so a driver we do not carry is still found.
+vadirs="$N/lib/dri"
+libva="$(ldconfig -p | awk '/libva\.so\.2 / {print $NF; exit}')"
+if [ -n "$libva" ]; then
+  libdir="$(dirname "$(readlink -f "$libva")")"
+  for d in "$libdir/dri-nonfree" "$libdir/dri-freeworld" "$libdir/dri"; do
+    [ -d "$d" ] && vadirs="$vadirs:$d"
+  done
+fi
+VA_ENV=/etc/environment.d/90-limina-va.conf
+mkdir -p /etc/environment.d
+printf 'LIBVA_DRIVERS_PATH=%s\n' "$vadirs" > "$VA_ENV"
+record "file $VA_ENV"
+# GStreamer caches its plugin scan per user and re-validates an entry only when the plugin file
+# itself changes: a VA element blacklisted under the previous driver stays so. The cache is
+# rebuildable; drop it, and the next GStreamer start rescans against these drivers.
+for home in /home/* /root; do
+  [ -d "$home/.cache/gstreamer-1.0" ] || continue
+  rm -f "$home/.cache/gstreamer-1.0"/registry.*.bin
 done
 
 if [ -n "$builtin" ]; then
