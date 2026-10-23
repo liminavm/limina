@@ -1464,6 +1464,20 @@ descriptors only when frames are audible so the latency shows in `appl_ptr - hw_
 8192-frame (170 ms) guest buffer, so only a partial correction that cannot cover ~200 ms Bluetooth
 without underruns.
 
+### Adding a virtio device renames the ones after it, so the guest forgets their settings
+Linux names an ACPI platform device `<HID>:<instance>`, the instance counting that HID in namespace
+order, and libkrun emits the DSDT's `LNRO0005` virtio devices in MMIO registration order (libkrun
+`devices/src/acpi.rs`, the `virtio_uid` loop). A build that registers a new virtio device ahead of
+another therefore renames it, and anything the guest keys on the path forgets it. Seen on the
+dogfood guest 2026-10-23: a build that added virtio-mem at `LNRO0005:01` moved virtio-snd from `:02`
+to `:03`, WirePlumber took it for a new card (`alsa_card.platform-LNRO0005_03`) and reset its volume
+to the 0.40 default; its saved state holds the same card under four names (two device-tree MMIO
+addresses, `_02`, `_03`). The fix is host-side so the stock tier gets it: a fixed DSDT order, the
+always-present devices first in a fixed sequence and optional or newly added ones (virtio-mem, the
+i2c battery, the GPU transport) after them, so a device that comes or goes never shifts one before
+it. Landing it renames the cards once more. A guest udev rule giving virtio devices a stable
+`ID_PATH` could back it up on the enhanced tier.
+
 ---
 
 ## Clipboard & agents
