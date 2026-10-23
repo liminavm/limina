@@ -69,7 +69,11 @@ const MEM_SETTLE_WAIT: Duration = Duration::from_secs(120);
 const GAP_DECAY_AFTER: Duration = Duration::from_secs(10);
 /// After a gap decay, don't ask for more for this long: the guest just proved it can't give
 /// more, and immediately re-commanding the same unfillable target re-enters the retry loop.
+/// Each further decay at the same fill and host level doubles it, up to [`GAP_BACKOFF_MAX`]
+/// ([`gap_ceiling_next`]): virtio-mem cannot unplug a block holding unmovable pages, so a split
+/// guest under host pressure stops short of its region at the same fill every time.
 const GAP_BACKOFF: Duration = Duration::from_secs(60);
+const GAP_BACKOFF_MAX: Duration = Duration::from_secs(15 * 60);
 /// An inflation step judges as INELASTIC when the guest's free list surrendered less than half
 /// of what the balloon absorbed: the difference was backfilled by reclaim, i.e. the step came
 /// out of page cache, not free memory. (kswapd holds MemFree at its watermark equilibrium —
@@ -540,6 +544,8 @@ struct State {
     /// ticks with a known `actual` — a failed stats query freezes it rather than resetting or
     /// advancing it.
     gap: Option<GapTrack>,
+    /// The fill the last gap decay stopped at, while it stands (see [`gap_ceiling_action`]).
+    gap_ceiling: Option<GapCeiling>,
     /// Armed after each sent inflation step: judged by [`elasticity_action`] once the fill
     /// progresses. Cleared by any deflate, decay, or scrub (a stale probe must never judge).
     elastic_probe: Option<ElasticityProbe>,
@@ -647,6 +653,29 @@ enum Elasticity {
 struct GapTrack {
     since: Instant,
     actual_at_arm: u32,
+}
+
+/// The fill a gap decay stopped at: a repeat decay at the same fill and host level backs off
+/// longer ([`gap_ceiling_next`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GapCeiling {
+    actual: u32,
+    host: HostPressure,
+    /// Consecutive decays at this fill.
+    decays: u32,
+    /// When the backoff this decay armed ends.
+    until: Instant,
+}
+
+/// The per-tick verdict on a standing [`GapCeiling`] (see [`gap_ceiling_action`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CeilingAction {
+    Keep,
+    /// The ceiling no longer describes the guest: forget it, the next decay starts over.
+    Drop,
+    /// The host level rose past the one the ceiling was measured under: forget it, and lift the
+    /// backoff it armed.
+    Lift,
 }
 
 /// The pure per-tick verdict on a commanded-but-unfilled gap (see [`gap_action`]).
@@ -778,6 +807,7 @@ impl BalloonPolicy {
                 demand_holdoff: None,
                 free_settled_since: None,
                 gap: None,
+                gap_ceiling: None,
                 elastic_probe: None,
                 inelastic: None,
                 host_debounce: HostDebounce::new(),
@@ -1075,6 +1105,10 @@ impl BalloonPolicy {
             if sent {
                 st.target_pages = new_target;
                 st.last_change = Some(now);
+                if new_target < old_target {
+                    // A release: whatever the guest could not give is no longer being asked for.
+                    st.gap_ceiling = None;
+                }
                 if matches!(decision, Decision::Shortfall(_)) {
                     // The next report's meminfo cannot have credited this release yet, and the
                     // driver may still be deflating into it: either way the shortfall it reads
@@ -1123,6 +1157,19 @@ impl BalloonPolicy {
         // ("Out of puff" spam) — after GAP_DECAY_AFTER of no fill progress, trim the target to
         // what the driver actually reached and back off. Skipped entirely when `actual` is
         // unknown (frozen, not reset — see `State::gap`).
+        if let Some(c) = st.gap_ceiling {
+            match gap_ceiling_action(&c, actual_pages, host.blended) {
+                CeilingAction::Keep => {}
+                CeilingAction::Drop => st.gap_ceiling = None,
+                CeilingAction::Lift => {
+                    st.gap_ceiling = None;
+                    // Only the backoff this ceiling armed: a release's cooldown stands.
+                    if st.cooldown_until == Some(c.until) {
+                        st.cooldown_until = None;
+                    }
+                }
+            }
+        }
         if let Some(a) = actual_pages {
             match gap_action(st.gap.as_ref(), st.target_pages, a, sent, now) {
                 GapAction::Clear => st.gap = None,
@@ -1140,14 +1187,21 @@ impl BalloonPolicy {
                         st.last_change = Some(now);
                         st.gap = None;
                         st.elastic_probe = None; // the decay is a deflate: any probe is stale
-                        let backoff = now + GAP_BACKOFF;
-                        st.cooldown_until =
-                            Some(st.cooldown_until.map_or(backoff, |t| t.max(backoff)));
+                        let ceiling =
+                            gap_ceiling_next(st.gap_ceiling.as_ref(), a, host.blended, now);
+                        let backoff = ceiling.until.duration_since(now);
+                        st.gap_ceiling = Some(ceiling);
+                        st.cooldown_until = Some(
+                            st.cooldown_until
+                                .map_or(ceiling.until, |t| t.max(ceiling.until)),
+                        );
                         decision = Decision::Decay(a);
                         sent = true;
                         log::warn!(
                             "autoballoon: gap decay — target trimmed to actual ({a} pages, \
-                             {gap_mib} MiB unfillable), inflation backed off {GAP_BACKOFF:?}"
+                             {gap_mib} MiB unfillable, decay {} at this fill), inflation backed \
+                             off {backoff:?}",
+                            ceiling.decays
                         );
                     }
                 }
@@ -1703,6 +1757,45 @@ fn gap_action(
             GapAction::Fire
         }
         Some(_) => GapAction::Stay,
+    }
+}
+
+/// The ceiling a gap decay at `actual` under `host` leaves (unit-tested): a repeat of the last
+/// decay — the same fill within [`GAP_EPS_PAGES`], the same host level — doubles the backoff,
+/// from [`GAP_BACKOFF`] up to [`GAP_BACKOFF_MAX`]; anything else starts over.
+fn gap_ceiling_next(
+    prev: Option<&GapCeiling>,
+    actual: u32,
+    host: HostPressure,
+    now: Instant,
+) -> GapCeiling {
+    let decays = match prev {
+        Some(c) if c.host == host && actual.abs_diff(c.actual) < GAP_EPS_PAGES => c.decays + 1,
+        _ => 1,
+    };
+    let backoff = GAP_BACKOFF
+        .saturating_mul(1 << (decays - 1).min(8))
+        .min(GAP_BACKOFF_MAX);
+    GapCeiling {
+        actual,
+        host,
+        decays,
+        until: now + backoff,
+    }
+}
+
+/// Whether a standing [`GapCeiling`] still describes the guest (unit-tested). A fill past it
+/// means the guest could give more after all; a different host level is a different question,
+/// and one that rose is owed an answer now rather than at the end of the backoff. An unknown
+/// fill (a failed stats query) keeps it.
+fn gap_ceiling_action(c: &GapCeiling, actual: Option<u32>, host: HostPressure) -> CeilingAction {
+    if host > c.host {
+        CeilingAction::Lift
+    } else if host != c.host || actual.is_some_and(|a| a >= c.actual.saturating_add(GAP_EPS_PAGES))
+    {
+        CeilingAction::Drop
+    } else {
+        CeilingAction::Keep
     }
 }
 
@@ -2615,6 +2708,7 @@ mod tests {
                 demand_holdoff: None,
                 free_settled_since: None,
                 gap: None,
+                gap_ceiling: None,
                 elastic_probe: None,
                 inelastic: None,
                 host_debounce: HostDebounce::new(),
@@ -3592,6 +3686,63 @@ mod tests {
         assert_eq!(
             gap_action(Some(&track(now, stuck)), target, stuck, false, now),
             GapAction::Stay
+        );
+    }
+
+    #[test]
+    fn a_repeated_gap_decay_backs_off_longer() {
+        let now = Instant::now();
+        let fill = 5 * GIB_PAGES;
+        let first = gap_ceiling_next(None, fill, HostPressure::Critical, now);
+        assert_eq!((first.decays, first.until), (1, now + GAP_BACKOFF));
+        // The same fill under the same host level doubles, up to the cap.
+        let mut c = first;
+        for want in [120, 240, 480, 900, 900] {
+            c = gap_ceiling_next(
+                Some(&c),
+                fill + GAP_EPS_PAGES - 1,
+                HostPressure::Critical,
+                now,
+            );
+            assert_eq!(c.until, now + Duration::from_secs(want));
+        }
+        // A different fill, or the same fill under another host level, starts over.
+        let moved = gap_ceiling_next(
+            Some(&c),
+            c.actual + GAP_EPS_PAGES,
+            HostPressure::Critical,
+            now,
+        );
+        assert_eq!(moved.decays, 1);
+        let other = gap_ceiling_next(Some(&c), fill, HostPressure::Warn, now);
+        assert_eq!(other.decays, 1);
+    }
+
+    #[test]
+    fn a_gap_ceiling_stands_until_the_guest_or_host_moves() {
+        let c = gap_ceiling_next(None, 5 * GIB_PAGES, HostPressure::Warn, Instant::now());
+        let at = Some(c.actual);
+        assert_eq!(
+            gap_ceiling_action(&c, at, HostPressure::Warn),
+            CeilingAction::Keep
+        );
+        assert_eq!(
+            gap_ceiling_action(&c, None, HostPressure::Warn),
+            CeilingAction::Keep
+        );
+        // A fill past the ceiling: the guest could give more after all.
+        assert_eq!(
+            gap_ceiling_action(&c, Some(c.actual + GAP_EPS_PAGES), HostPressure::Warn),
+            CeilingAction::Drop
+        );
+        // The host easing forgets it; the host worsening also lifts the backoff.
+        assert_eq!(
+            gap_ceiling_action(&c, at, HostPressure::Normal),
+            CeilingAction::Drop
+        );
+        assert_eq!(
+            gap_ceiling_action(&c, at, HostPressure::Critical),
+            CeilingAction::Lift
         );
     }
 
