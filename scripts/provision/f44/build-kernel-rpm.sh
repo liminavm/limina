@@ -251,3 +251,32 @@ rm -f "$OUT"/*.rpm
 cp -f "$RPM" "$DEVEL_RPM" "$OUT"/
 ls -la "$OUT"/*.rpm 2>/dev/null || { echo "(no kernel RPM produced)"; exit 1; }
 echo "    KREL=$KREL"
+
+# The source reference the payload ships beside the RPM: the kernel's corresponding source is the
+# fork at this rev plus this config, so that is what it names.
+tmpd=$(mktemp -d); kdst="$tmpd/limina-kernel-16k-source"; mkdir -p "$kdst"
+cp -f "$BUILD/.config" "$kdst/config"
+cp -f "$REPO/third_party/manifest.toml" "$kdst/manifest.toml"
+cp -f "$HERE/build-kernel-rpm.sh" "$kdst/"
+# The URL is always the fork's: a local override's file:// path means nothing to a reader.
+PIN_URL="$(pin linux repo)"
+cat > "$kdst/SOURCE.txt" <<TXT
+limina-kernel-16k source reference
+==================================
+This kernel is NOT built from a Fedora SRPM. It is the limina kernel fork — upstream
+stable $KVER plus our commits — with Fedora's config + CONFIG_ARM64_16K_PAGES=y, packaged
+by build-kernel-rpm.sh. There is no patch series to apply: our changes ARE the commits on
+the branch. Fully reproducible:
+
+  source:    git init && git fetch --depth 1 $PIN_URL \\
+             $KREV
+  our delta: git log --oneline $KVER..$KREV
+  config:    ./config   (also shipped inside the RPM at /lib/modules/<KREL>/config)
+  pin:       ./manifest.toml  ([linux] section — repo/branch/rev/base)
+  build:     ./build-kernel-rpm.sh
+
+Upstream-facing status of each commit: docs/upstreaming/ledger/linux.md in the limina repo.
+TXT
+tar -czf "$OUT/limina-kernel-16k-source.tar.gz" -C "$tmpd" limina-kernel-16k-source
+rm -rf "$tmpd"
+echo "    source reference: $OUT/limina-kernel-16k-source.tar.gz"

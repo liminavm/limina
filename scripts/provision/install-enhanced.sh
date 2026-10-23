@@ -6,85 +6,77 @@
 #
 # Runs INSIDE a basic (stock) Fedora guest and upgrades it to the enhanced tier. Per the
 # two-tier guarantee (CLAUDE.md) this is the bootstrap substrate: it must depend ONLY on what
-# a stock F43 already has (dnf, grubby, systemctl, virtiofs) — NOT on the 16k kernel / venus
-# it installs. It is delivered via a virtio-fs share (the "attached volume") and run
-# here, so the host never mutates the guest image directly.
+# a stock Fedora already has (dnf, grubby, systemctl, virtiofs) — NOT on the 16k kernel or the
+# drivers it installs. It is delivered via a virtio-fs share (the "attached volume") or scp and
+# run here, so the host never mutates the guest image directly.
 #
-# DELIVERY = RPMs that REPLACE stock at /usr (see memory limina-enh-delivery). We do NOT use
-# systemd-sysext for mesa: enhanced mesa is 26.2 but stock F43 is 25.3.6, so the libgallium
-# soname differs; an overlay can only SHADOW (not remove) the stock lib, leaving a 25.3.6/26.2
-# ABI blend that breaks mutter's KMS EGL. An RPM REPLACES stock (old soname removed) so nothing
-# blends; `dnf versionlock` then pins it so an update cannot drag mesa back to a venus-breaking
-# stock version.
+# The guest keeps its distro's Mesa. limina's GPU drivers install beside it under /opt/limina
+# (guest/gpu-drivers/install.sh, docs/design/metal-transport-delivery.md §1) and drive every
+# virtio-gpu in its place, so nothing of the distro's is replaced, locked or shadowed.
 #
 # Installs, each additive (a guest may already have some — partial states are normal):
-#   1. 16k kernel RPM   -> kernel-install/dracut writes a BLS entry; INSTALLONLY (co-exists with
-#                          stock AND keeps the prior enhanced kernel as a fallback). The STOCK
-#                          kernel is locked (not ours) so a stock update can't steal the default.
-#   2. mesa RPMs        -> replace stock mesa at /usr (venus Vulkan; GL stays virgl); LOCKED, but the
-#                          installer lifts the lock to UPDATE it, then re-locks (re-runnable).
-#   3. clipboard@limina  -> REMOVED, not installed: the gnome-shell extension was retired
-#                          2026-08-15 (#37 step 4) now that stock spice-vdagent carries the
-#                          clipboard on GNOME. This step deletes it from guests that have it.
-#   3b. local dnf repo   -> /usr/share/limina-guest-tools/repo + a .repo file: EVERY mesa
-#                          subpackage Fedora ships (-devel/-tests included, debuginfo excluded),
-#                          at OUR NEVRA. Installed on demand (`dnf install mesa-libgbm-devel`) —
-#                          Fedora's own -devel subpackages can never resolve against the
-#                          versionlocked runtime (exact-NEVRA requires vs exclude filtering).
+#   0. migration         -> undoes the retired RPM model on a guest that has it: our mesa RPMs
+#                           (back to the distro's), their versionlocks, the local dnf repo and
+#                           the driver-selection environment file.
+#   1. 16k kernel RPM    -> kernel-install/dracut writes a BLS entry; INSTALLONLY (co-exists with
+#                           stock AND keeps the prior enhanced kernel as a fallback). The STOCK
+#                           kernel is locked (not ours) so a stock update can't steal the default.
+#                           Its -devel goes in with it: DKMS builds the GPU module against it.
+#   2. GPU drivers       -> limina-gpu-drivers/install.sh: the vendor drivers under /opt/limina
+#                           and the virtio-gpu module through DKMS, built for the running kernel
+#                           here and for the 16k kernel explicitly.
+#   3. clipboard@limina  -> REMOVED, not installed: the gnome-shell extension was retired now
+#                           that stock spice-vdagent carries the clipboard on GNOME. This step
+#                           deletes it from guests that have it.
 #   4. limina-agent      -> /usr/local/bin + system unit (dynamic resize, PSI autoballoon);
 #      limina-agent-session -> /usr/local/bin + systemd USER unit (the clipboard bridge — it
-#                          must live in the graphical session, so it is a separate binary and
-#                          is enabled --global for every user's next login).
-#                          Both OPTIONAL: installed only if staged into the payload, and
-#                          SELinux-relabeled so they start on a stock (Enforcing) guest.
-#   5. driver-select env -> /etc/environment.d (GL via virgl/vrend, force the venus Vulkan ICD)
-#   6. GRUB              -> default to the 16k kernel + auto-boot (unattended)
+#                           must live in the graphical session, so it is a separate binary and
+#                           is enabled --global for every user's next login).
+#                           Both OPTIONAL: installed only if staged into the payload, and
+#                           SELinux-relabeled so they start on a stock (Enforcing) guest.
+#   5. GRUB              -> the 16k kernel boots once on trial, and is promoted on success
 #
 # Usage (in guest):  sudo /path/to/install-enhanced.sh [PAYLOAD_DIR]
 #   PAYLOAD_DIR defaults to the script's own directory (the mounted share).
-
-# The Vulkan driver list step 5 pins: the vendor GPU drivers' ICDs, which
-# guest/gpu-drivers/install.sh links into /etc/vulkan/icd.d as limina-*.json and adds to this
-# pin, ahead of venus as it puts them. Rewriting the pin with venus alone would hide them.
-vk_driver_files() {  # <venus icd or ""> [<icd dir>]
-  local list="" f
-  for f in "${2:-/etc/vulkan/icd.d}"/limina-*.json; do
-    [ -e "$f" ] && list+="$f:"
-  done
-  list+="$1"
-  echo "${list%:}"
-}
-# Sourced (scripts/tests/install-enhanced-vk-drivers.sh), it stops at the helpers above.
-[[ "${BASH_SOURCE[0]}" != "$0" ]] && return 0
 
 set -euo pipefail
 PAYLOAD="${1:-$(cd "$(dirname "$0")" && pwd)}"
 echo "== limina enhanced-tier installer (payload: $PAYLOAD) =="
 [ "$(id -u)" = 0 ] || { echo "must run as root (sudo)"; exit 1; }
+[ -x "$PAYLOAD/limina-gpu-drivers/install.sh" ] || { echo "no limina-gpu-drivers/ in payload"; exit 1; }
 
 # dnf versionlock plugin is not in a minimal install; pull it from what stock already ships.
 echo "-- ensuring dnf versionlock plugin"
 dnf install -y 'dnf-command(versionlock)' >/dev/null 2>&1 \
   || dnf install -y python3-dnf-plugin-versionlock >/dev/null 2>&1 || true
 
-# Collect runtime RPMs for a glob, excluding debug/devel/tests (installed by DEFAULT on every
-# guest; the devel/tests subpackages ship via the local repo of step 3b instead, on demand).
-runtime_rpms() {  # <glob>
-  ls $1 2>/dev/null | grep -vE 'debuginfo|debugsource|-devel-|-tests-' || true
-}
-
-# Payload RPMs for optional (-devel/-tests) subpackages the guest ALREADY installed (e.g.
-# mesa-libgbm-devel pulled from the step-3b repo). They MUST ride the same upgrade transaction
-# as the runtime set: their requires are exact-NEVRA, so upgrading the runtime alone would make
-# `dnf --allowerasing` silently ERASE them instead.
-installed_extra_rpms() {  # <glob>
-  local r n
-  for r in $(ls $1 2>/dev/null | grep -E -- '-devel-|-tests-' | grep -vE 'debuginfo|debugsource'); do
-    n=$(rpm -qp --qf '%{NAME}' "$r" 2>/dev/null) || continue
-    rpm -q "$n" >/dev/null 2>&1 && echo "$r"
-  done
-  return 0
-}
+### 0. migration off the retired RPM model ######################################
+# A guest the RPM model upgraded carries our rebuilt mesa at /usr, versionlocked, a local dnf repo
+# serving it, and an environment file selecting drivers for every client. The vendor drivers need
+# none of it, and the environment file would steer every client away from them. Each piece goes
+# on its own, so a guest that has some of it, or none, comes out the same.
+for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do
+  dnf versionlock delete "$p" >/dev/null 2>&1 || true
+done
+if [ -e /etc/yum.repos.d/limina-guest-tools.repo ] || [ -d /usr/share/limina-guest-tools ]; then
+  echo "-- removing the retired limina-guest-tools local dnf repo"
+  rm -f /etc/yum.repos.d/limina-guest-tools.repo
+  rm -rf /usr/share/limina-guest-tools
+fi
+if [ -e /etc/environment.d/90-limina-zink.conf ]; then
+  echo "-- removing the retired driver selection (/etc/environment.d/90-limina-zink.conf)"
+  rm -f /etc/environment.d/90-limina-zink.conf
+fi
+# Read to the end, not `grep -q`: under pipefail an early exit fails rpm with SIGPIPE.
+if rpm -qa 'mesa-*' --qf '%{RELEASE}\n' | grep limina >/dev/null; then
+  # The repo is gone, so the distro's builds are the only ones dnf knows: distro-sync returns
+  # every mesa package to them. It needs the network; without it our mesa stays, unlocked, which
+  # the vendor drivers do not mind, and a later run (or the command below) finishes the job.
+  echo "-- returning mesa to the distro's builds"
+  if ! dnf distro-sync -y 'mesa-*'; then
+    echo "   WARN: could not reach the distro's mesa; ours stays until: sudo dnf distro-sync 'mesa-*'" >&2
+  fi
+fi
 
 # ---- btrfs v1 space cache -> v2 free-space tree -------------------------------------------------
 # A 16k-page kernel CANNOT mount a btrfs that still uses the v1 free-space cache: open_ctree fails
@@ -210,7 +202,7 @@ ARMUNIT
   systemctl enable limina-arm-16k.service >/dev/null 2>&1 || true
 }
 
-### 1. 16k kernel RPM -> BLS entry via kernel-install + dracut; versionlock #######
+### 1. 16k kernel RPM -> BLS entry via kernel-install + dracut ##################
 # REFUSE to guess when a payload carries more than one kernel. This used to be `head -1`, whose
 # lexical sort picks the OLDER version — so a payload that accidentally kept a stale kernel
 # installed the stale one and the "successful" install silently ran the wrong kernel (twice on
@@ -224,20 +216,19 @@ done
   echo "payload carries ${#KRPMS[@]} kernel RPMs — refusing to guess which is intended:"
   printf '  %s\n' "${KRPMS[@]}"; exit 1; }
 RPM="${KRPMS[0]}"
-# Its headers, which DKMS builds the vendor GPU drivers' module against. They go in with the
-# kernel, in one transaction: DKMS builds for a new kernel inside its kernel-install add, and needs
-# them there by then. A payload from before the kernel had them carries none.
+# Its headers, which DKMS builds the GPU drivers' module against (step 2). They go in with the
+# kernel, in one transaction, so a DKMS already registered builds for it inside its kernel-install.
 DEVEL_RPM="$(dirname "$RPM")/$(basename "$RPM" | sed 's/^limina-kernel-16k-/limina-kernel-16k-devel-/')"
-[ -f "$DEVEL_RPM" ] || DEVEL_RPM=""
+[ -f "$DEVEL_RPM" ] || { echo "no $(basename "$DEVEL_RPM") in payload"; exit 1; }
 
 # Capture the CURRENT default kernel BEFORE we install the 16k — Fedora's kernel install
-# auto-promotes the newest kernel to default, and step 6 must restore the PREVIOUS default as the
-# permanent fallback (two-tier safety; see step 6).
+# auto-promotes the newest kernel to default, and step 5 must restore the PREVIOUS default as the
+# permanent fallback (two-tier safety; see step 5).
 STOCK_DEFAULT=$(grubby --default-kernel 2>/dev/null || true)
 
 # Is the payload kernel ALREADY installed at this exact NVR? Compute it up front so the /boot
 # pre-flight below fires ONLY when an install would actually WRITE to /boot: a no-op re-run (e.g. to
-# bump mesa) on a tight /boot must NOT abort here when the kernel section will write nothing.
+# refresh the drivers) on a tight /boot must NOT abort here when the kernel section will write nothing.
 KNVR=$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}' "$RPM" 2>/dev/null)
 KERNEL_PRESENT=0
 if [ -n "$KNVR" ] && rpm -q "$KNVR" >/dev/null 2>&1; then KERNEL_PRESENT=1; fi
@@ -287,8 +278,8 @@ if [ "$KERNEL_PRESENT" = 1 ]; then
   echo "-- kernel $KNVR already installed; skipping kernel install (idempotent)"
 else
   echo "-- installing kernel (rpm -i, co-installs beside the running kernel): $(basename "$RPM")" \
-    "${DEVEL_RPM:++ $(basename "$DEVEL_RPM")}"
-  rpm -ivh "$RPM" ${DEVEL_RPM:+"$DEVEL_RPM"}
+    "+ $(basename "$DEVEL_RPM")"
+  rpm -ivh "$RPM" "$DEVEL_RPM"
 fi
 # KREL of the kernel we just installed — from the RPM's kernel-uname-r provide, NOT a /lib/modules
 # glob: multiple limina16k kernels now co-exist, so a glob+head would pick the wrong (older) one.
@@ -334,77 +325,23 @@ done
 echo "   kernel $KREL: initramfs verified (virtio_blk + $ROOT_FS) + BLS entry present"
 echo "   (installonly: co-installed beside stock + prior enhanced; stock kernel pinned)"
 
-### 2. mesa RPMs (26.x venus) -> REPLACE stock at /usr; versionlock ##############
-MESA_RPMS=$(runtime_rpms "$PAYLOAD/mesa-*.rpm")
-[ -n "$MESA_RPMS" ] || { echo "no mesa RPMs in payload"; exit 1; }
-# Guard against a STALE-OVERLAY payload (hit 2026-07-20): extracting a new tarball over an
-# old payload dir leaves the previous mesa NEVRA's RPMs beside the new ones (tar does not
-# delete), and dnf then sees both versions "from @commandline" and fails the transaction.
-# All payload mesa RPMs must share one VERSION-RELEASE.
-MESA_VRS=$(for r in $MESA_RPMS; do rpm -qp --qf '%{VERSION}-%{RELEASE}\n' "$r" 2>/dev/null; done | sort -u)
-[ "$(echo "$MESA_VRS" | wc -l)" -eq 1 ] || {
-  echo "ERROR: payload holds MIXED mesa versions ($(echo $MESA_VRS | tr '\n' ' ')) — stale" >&2
-  echo "       extract-over-old-dir? rm the payload dir and re-extract the tarball fresh." >&2
-  exit 1
-}
-# Carry any already-installed mesa -devel/-tests along in the SAME transaction (see the helper).
-MESA_EXTRAS=$(installed_extra_rpms "$PAYLOAD/mesa-*.rpm")
-[ -z "$MESA_EXTRAS" ] || MESA_RPMS="$MESA_RPMS
-$MESA_EXTRAS"
-echo "-- installing mesa (replaces stock -> our venus build):"; echo "$MESA_RPMS" | sed 's#.*/#     #'
-# Lift any EXISTING mesa versionlock FIRST. On a re-run / update the lock pins the currently
-# installed enhanced mesa, so a newer build would be "filtered out by exclude filtering" and never
-# install — lifting before install is what lets the installer UPDATE a versionlocked package. On a
-# fresh guest there is no lock yet (no-op). We re-lock immediately after. (This needs the payload's
-# mesa to be a STRICTLY NEWER NEVRA than what's installed; the build bumps LIMINA_REL for that.)
-# Delete by EXACT name: dnf5's `versionlock delete <glob>` is a silent no-op that still exits 0
-# (so a `glob || per-package` form never falls through). Iterate the installed mesa packages.
-for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do
-  dnf versionlock delete "$p" >/dev/null 2>&1 || true
-done
-# `dnf install` of the higher-versioned local RPMs upgrades/replaces the matching packages —
-# but it silently no-ops when the payload NEVRA is LOWER than what's installed. That case is
-# real: the 2026-08-05 F43 repoint moved that family's base 26.2.0 (main snapshot) -> 26.1.5
-# (the F44 SRPM base), a deliberate one-time version regression. Detect it and use
-# `dnf downgrade` instead. (sort -V on EVR is sufficient: no mesa package carries an Epoch.)
-DNF_VERB=install
-_pay_rpm=$(echo "$MESA_RPMS" | head -1)
-_pay_name=$(rpm -qp --qf '%{NAME}' "$_pay_rpm" 2>/dev/null || true)
-_pay_evr=$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$_pay_rpm" 2>/dev/null || true)
-_inst_evr=$(rpm -q --qf '%{VERSION}-%{RELEASE}' "$_pay_name" 2>/dev/null || true)
-if [ -n "$_pay_evr" ] && [ -n "$_inst_evr" ] && [ "$_pay_evr" != "$_inst_evr" ] \
-   && [ "$(printf '%s\n%s\n' "$_pay_evr" "$_inst_evr" | sort -V | head -1)" = "$_pay_evr" ]; then
-  echo "   installed mesa $_inst_evr > payload $_pay_evr — base repoint, using dnf downgrade"
-  DNF_VERB=downgrade
+### 2. GPU drivers: vendor drivers + the virtio-gpu module through DKMS ###########
+# The drivers' own installer does the running kernel; the 16k kernel just installed is not running,
+# so its module is built here. Its initramfs is rebuilt after, so early boot binds the extended
+# virtio-gpu rather than the in-tree one.
+echo "-- installing the GPU drivers"
+"$PAYLOAD/limina-gpu-drivers/install.sh"
+if [ "$(modinfo -k "$KREL" -n virtio_gpu 2>/dev/null)" != "(builtin)" ]; then
+  DKMS_VER="$(cat "$PAYLOAD/limina-gpu-drivers/dkms/VERSION")"
+  if dkms install "limina-virtio-gpu/$DKMS_VER" -k "$KREL"; then
+    dracut -f --kver "$KREL"
+    echo "   virtio-gpu module built for $KREL: $(modinfo -k "$KREL" -n virtio_gpu)"
+  else
+    echo "   WARN: the virtio-gpu module did not build for $KREL: the Metal transport stays off there" >&2
+  fi
 fi
-# GUARD the transaction: the lock is now LIFTED, and under `set -e` a failed install would abort
-# the script BEFORE the re-lock below — leaving mesa UNLOCKED so a later `dnf update` could drag
-# it back to a venus-breaking stock version (a silent, keyboard-less-to-recover regression on a
-# daily driver). On failure, dnf is transactional (the prior enhanced mesa stays installed), so
-# re-lock THAT and abort loudly.
-if ! dnf "$DNF_VERB" -y --allowerasing $MESA_RPMS; then
-  echo "ERROR: mesa install failed — restoring the mesa versionlock and aborting (mesa unchanged)" >&2
-  for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do dnf versionlock add "$p" >/dev/null 2>&1 || true; done
-  exit 1
-fi
-# Re-lock the mesa stack so a later `dnf update` cannot revert it to a venus-breaking stock version.
-for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do
-  dnf versionlock add "$p" >/dev/null 2>&1 || true
-done
-echo "   mesa installed + (re-)versionlocked"
-rpm -q mesa-vulkan-drivers --qf '   venus ICD pkg: %{NVRA}\n' 2>/dev/null || true
-# GStreamer caches its plugin scan per user and re-validates an entry only when the plugin file
-# itself changes. A VA plugin that crashed at scan under an older mesa stays blacklisted in that
-# cache across a mesa upgrade, so every GStreamer app keeps reporting `no element "vavp9dec"`
-# with a fixed driver installed. The cache is a plain rebuildable file: drop it, and the next
-# GStreamer start rescans against the mesa just installed.
-for home in /home/* /root; do
-  [ -d "$home/.cache/gstreamer-1.0" ] || continue
-  rm -f "$home/.cache/gstreamer-1.0"/registry.*.bin
-done
-echo "   GStreamer plugin registries dropped (rescanned against this mesa at next use)"
 
-### 3. clipboard@limina gnome-shell extension -> REMOVED (retired 2026-08-15, #37 step 4) ###
+### 3. clipboard@limina gnome-shell extension -> REMOVED ##########################
 # The extension was the GNOME tier of our own clipboard bridge. Stock spice-vdagent
 # carries the clipboard on GNOME now, and limina-agent-session yields to it wherever it
 # serves, so the extension has no peer left to talk to. Upgrading guests get it deleted
@@ -421,37 +358,6 @@ if [ -d "$EXT_DST" ]; then
     rm -f "$home/.local/state/limina/clipboard-extension-enabled"
   done
   echo "   removed $EXT_DST (the clipboard rides spice-vdagent / ext-data-control now)"
-fi
-
-### 3b. local dnf repo: every mesa subpackage Fedora ships, installable on demand ###
-# The runtime mesa stack is versionlocked at our NEVRA (step 2), which EXCLUDES the stock mesa
-# versions — so Fedora's own -devel subpackages (exact-NEVRA `Requires: mesa-libgbm(aarch-64) =
-# <stock>`) can never resolve on an enhanced guest ("filtered out by exclude filtering"). This
-# repo serves OUR builds of the full subpackage set at the matching NEVRA, so a plain
-# `dnf install mesa-libgbm-devel` works exactly as it does on stock Fedora. The repodata is
-# pre-built by package-payload.sh (createrepo_c in the build guest) — nothing here needs network.
-if [ -d "$PAYLOAD/repo/repodata" ]; then
-  echo "-- installing the limina-guest-tools local dnf repo (-devel/-tests on demand)"
-  rm -rf /usr/share/limina-guest-tools/repo
-  install -d /usr/share/limina-guest-tools
-  cp -a "$PAYLOAD/repo" /usr/share/limina-guest-tools/repo
-  cat > /etc/yum.repos.d/limina-guest-tools.repo <<'REPOCONF'
-# limina enhanced tier: local repo carrying our FULL mesa subpackage set (the runtime is
-# versionlocked at the limina NEVRA, so Fedora's exact-version -devel subpackages cannot resolve;
-# these match). Installed by install-enhanced.sh; refreshed on every enhanced upgrade.
-[limina-guest-tools]
-name=limina guest tools (local)
-baseurl=file:///usr/share/limina-guest-tools/repo
-enabled=1
-gpgcheck=0
-REPOCONF
-  # cp -a from the virtiofs share preserves xattrs — relabel so enforcing guests read it cleanly.
-  if command -v restorecon >/dev/null 2>&1; then
-    restorecon -R /usr/share/limina-guest-tools /etc/yum.repos.d/limina-guest-tools.repo 2>/dev/null || true
-  fi
-  echo "   repo live: e.g. 'dnf install mesa-libgbm-devel' now resolves against our build"
-else
-  echo "-- payload has no repo/ (pre-repo payload); -devel subpackages stay uninstallable on this guest"
 fi
 
 ### 4. limina-agent + limina-agent-session (OPTIONAL; present iff staged into the payload) ##
@@ -518,78 +424,7 @@ else
   echo "-- no limina-agent-session in payload; skipping (host<->guest clipboard stays inactive)"
 fi
 
-### 5. driver selection: GL via virgl (vrend), Vulkan via venus ################
-# mesa now lives at /usr, so this is plain driver-selection env (no LD_LIBRARY_PATH/prefix).
-# Since 2026-08-04 GL rides the virgl driver (host vrend renders EGLImage-backed IOSurface
-# scanouts zero-copy; zink-as-guest-GL is no longer a supported configuration — most guest
-# zink patches only guarded host feature gaps, and the vrend present path is now blit-free).
-# Vulkan stays venus: our mesa-vulkan-drivers ships BOTH lavapipe (lvp) and venus (virtio)
-# ICDs, so pin venus; otherwise clients may enumerate lavapipe first and run on the CPU. On
-# a stock-4k fallback boot venus will not init and Vulkan degrades — acceptable, that path
-# is the safety net, not the feature. (File name kept as 90-limina-zink.conf so upgrades
-# overwrite the old selection instead of leaving it to fight a new file.)
-echo "-- GL driver selection -> virgl (vrend); Vulkan -> venus"
-VENUS_ICD=$(ls /usr/share/vulkan/icd.d/virtio_icd.*.json 2>/dev/null | head -1)
-mkdir -p /etc/environment.d
-{
-  echo "# limina enhanced tier: GL through virgl (vrend), Vulkan through venus."
-  echo "GALLIUM_DRIVER=virgl"
-  echo "MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu"
-  VK_FILES=$(vk_driver_files "$VENUS_ICD")
-  [ -n "$VK_FILES" ] && echo "VK_DRIVER_FILES=$VK_FILES"
-  # Let clients see the host GPU-memory budget. venus advertises VK_EXT_memory_budget only
-  # under this flag (`.EXT_memory_budget = VN_DEBUG(MEM_BUDGET)`), which upstream gates
-  # because the host's answer is a plain passthrough of the GPU's own heap and therefore
-  # not worth a ring round-trip. Ours is not: since virglrenderer's vkr_budget_query the
-  # host answers from OUR ledger, so the numbers describe the cap the guest will actually
-  # be killed at (vkr_budget.h). That makes it the one piece of backpressure the venus
-  # transport does not discard — an allocation refusal cannot be delivered (the guest never
-  # reads our VkResult), but a budget QUERY round-trips synchronously, so a client that
-  # honours it can drop caches instead of losing its context.
-  #
-  # The name is misleading: VN_DEBUG here is a plain runtime env gate, not a debug build or
-  # any extra logging (the noisy print is behind VN_DEBUG=init, separately). Cost is one
-  # round-trip per budget query, and only from clients that ask — nothing queries it per
-  # frame; zink's is behind pipe_screen::query_memory_info, i.e. GL_NVX_gpu_memory_info.
-  echo "VN_DEBUG=mem_budget"
-  # No VN_PERF here. `no_fence_feedback` used to be set and was RETIRED 2026-07-25.
-  #
-  # It was a workaround from the MoltenVK era: venus's feedback buffers are a host-written
-  # counter in a host-visible blob, and that blob was not coherent on the 16 KiB hv_vm_map path,
-  # so venus's poll loop spun forever (spikes/venus-render-server, Finding 6). The coherency bug
-  # was fixed 2026-07-03 (libkrun 0043 + virglrenderer 0023 + patches/linux/0004), which removed
-  # the reason for the flag; it just outlived it.
-  #
-  # Keeping it was not free. Without feedback every fence status check is a synchronous
-  # driver<->renderer round trip (vn_queue.c: NO_FENCE_FEEDBACK skips the feedback slot, so
-  # vn_GetFenceStatus falls through to vn_call_vkGetFenceStatus); with it, the check is a plain
-  # guest-memory read. gnome-shell-rs measured the difference on submits carrying real work:
-  # 13.6-15.3 ms for eight blur submits with feedback vs 17.7-22.1 ms without, i.e. 25-30% of the
-  # wall clock, while a batched one-submit control is identical either way -- so it is the wait,
-  # not the work.
-  #
-  # Verified before removal: with the flag gone the guest reboots, gnome-shell comes up on
-  # zink->venus, and vkmark scores 1985 against 1929 with the workaround. The old hang does not
-  # return -- unsurprising in hindsight, since only the FENCE flag was still set while the path
-  # that actually hung was the SEMAPHORE one, and that has been running enabled for a long time.
-  #
-  # CHECK ON A MESA BUMP PAST 26.2.x: upstream's 4c1938c8adb "venus: deprecate fence feedback"
-  # (2026-07-12) changes this area, and we have NOT established which way. Two readings, opposite
-  # consequences: if the FLAG went and feedback is now unconditional, the bump hands us the fast
-  # path for free; if the MECHANISM went, we land permanently on the synchronous path with no way
-  # back and need to carry a revert. The mesa-cs tree cannot settle it (its venus history stops at
-  # 2026-04-03), so read the commit before bumping. Either way removing the flag here is correct --
-  # it is dead config under one reading and aligned with upstream under the other.
-  #
-  # Measured 2026-07-25, which moves the trigger: the F43 enhanced image's mesa 26.2.0-3.limina
-  # STILL ships no_fence_feedback (checked with the strings command below, in-guest), so the
-  # deprecation is not in 26.2.0 and lands in a later release. 26.1.x and 26.2.x are both fine.
-  # Check the INSTALLED driver, not a source tree:
-  #   strings /usr/lib64/libvulkan_virtio.so | grep '^no_'
-} > /etc/environment.d/90-limina-zink.conf
-sed 's/^/   /' /etc/environment.d/90-limina-zink.conf
-
-### 6. GRUB: try the 16k kernel for ONE boot; auto-fall-back to stock on failure ##
+### 5. GRUB: try the 16k kernel for ONE boot; auto-fall-back to stock on failure ##
 # CRITICAL two-tier safety. Do NOT make the unproven 16k kernel the permanent default: limina
 # has no keyboard at GRUB or the emergency shell (2026-06-29), so a 16k that fails to boot would
 # strand the guest with no way to pick stock. Instead keep stock as the PERMANENT default, boot
@@ -693,7 +528,7 @@ if [ "$FST_DEFER" = 1 ]; then
   echo "   on stock); the 16k trial then auto-arms. After that it boots ONCE on trial and, once it"
   echo "   reaches the desktop, auto-promotes to the default kernel."
 else
-  echo "   Reboot now. The 16k + venus desktop boots ONCE on trial:"
+  echo "   Reboot now. The 16k kernel boots ONCE on trial:"
   echo "     - reaches the desktop -> auto-promoted to the default kernel;"
   echo "     - fails to boot       -> force a power-cycle; the guest auto-returns to stock."
   echo "   (The trial-boot exists so an unbootable kernel cannot become the permanent default;"

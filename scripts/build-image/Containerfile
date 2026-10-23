@@ -21,7 +21,7 @@ ARG FEDORA_REL=44
 FROM fedora:${FEDORA_REL}
 
 # Union of every Linux build's explicit deps (dedup'd from the build-*.sh scripts):
-#   RPM tooling (mesa/mutter/kernel RPMs) … rpm-build dnf-plugins-core rpmdevtools cpio xz
+#   RPM tooling (the 16k kernel RPM) ……… rpm-build dnf-plugins-core rpmdevtools cpio xz
 #   kernel (kernel-rpm, test-kernel) ……… gcc make flex bison bc elfutils-libelf-devel openssl-devel
 #                                          perl rsync kmod gzip diffutils findutils
 #   mesa / venus / zink (source builds) … meson ninja-build python3-mako glslang-devel patch zstd
@@ -30,7 +30,8 @@ FROM fedora:${FEDORA_REL}
 #                                          libwayland-client xcb-util-keysyms-devel xcb-util-wm-devel
 #   enhanced tier, in-container …………… sudo kernel-core cargo rust
 #
-# The last row is what lets scripts/provision/f44/* run here as well as in a guest:
+# The last row is what lets scripts/provision/f44/build-kernel-rpm.sh run here as well as in a
+# guest:
 #   - `sudo`: those scripts are written to run as an unprivileged guest user and call `sudo dnf`.
 #     As root, sudo is a pass-through, so having it present costs nothing and means the SAME
 #     script works in both places with no branching.
@@ -38,8 +39,7 @@ FROM fedora:${FEDORA_REL}
 #     RUNNING kernel's `/boot/config-$(uname -r)`; here `uname -r` is the container host's
 #     kernel, so the config comes from this package instead — which pins the config to a
 #     package version rather than to whatever a guest happened to be booted on.
-#   - `cargo`/`rust`: build-all.sh compiles limina-agent natively rather than dnf-installing
-#     the toolchain mid-build.
+#   - `cargo`/`rust`: Rust builds against the F44 userspace.
 RUN dnf -y install \
         bc bison cmake cpio diffutils dnf-plugins-core elfutils-libelf-devel \
         findutils flex gcc gcc-c++ git glslang-devel gzip kmod libwayland-client \

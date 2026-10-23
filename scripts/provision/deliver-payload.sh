@@ -18,9 +18,11 @@
 #   4. scp the tarball into the guest's home, extract, run `install-enhanced.sh` (its log lands in
 #      LIMINA_DELIVER_LOGDIR, default /tmp);
 #   5. verify the installed `limina-agent` / `limina-agent-session` are byte-for-byte the payload's
-#      (sha256 on both ends) and print the installer's kernel-default lines — when the permanent
-#      default is not the payload's 16k kernel, the image still OWES a trial boot (an EFI boot to
-#      the desktop auto-promotes it; see docs/images.md);
+#      (sha256 on both ends); that the GPU drivers are the payload's (/opt/limina/<wire>/MESA_REV),
+#      the distro's mesa serves /usr (no `.limina` mesa RPM, no driver-selection environment file)
+#      and the 16k kernel's virtio-gpu module is DKMS's; and print the installer's kernel-default
+#      lines — when the permanent default is not the payload's 16k kernel, the image still OWES a
+#      trial boot (an EFI boot to the desktop auto-promotes it; see docs/images.md);
 #   6. clean poweroff, wait for the supervisor to exit, next image.
 #
 # Env: LIMINA_GUEST_USER (default claude — the images' autologin user with NOPASSWD sudo),
@@ -48,6 +50,9 @@ SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLeve
 payload_sha() { tar --zstd -xOf "$PAYLOAD" "limina-guest-tools/$1" | shasum -a 256 | cut -d' ' -f1; }
 WANT_AGENT="$(payload_sha limina-agent)"
 WANT_SESSION="$(payload_sha limina-agent-session)"
+# The GPU drivers' trees, each by the Mesa it was built from.
+WANT_DRIVERS="$(tar --zstd -tf "$PAYLOAD" | sed -nE 's|^limina-guest-tools/limina-gpu-drivers/drivers/opt/limina/([0-9]+)/MESA_REV$|\1|p')"
+[ -n "$WANT_DRIVERS" ] || { echo "no GPU drivers in $PAYLOAD" >&2; exit 2; }
 echo "payload $TARBALL ($REV): limina-agent ${WANT_AGENT:0:12}… limina-agent-session ${WANT_SESSION:0:12}…"
 
 deliver() {
@@ -114,7 +119,30 @@ deliver() {
   [ "$got_session" = "$WANT_SESSION" ] || { echo "!!! /usr/local/bin/limina-agent-session is ${got_session:-absent}, payload has $WANT_SESSION" >&2; ok=0; }
   [ "$ok" = 1 ] && echo "verified: both agent binaries match the payload"
 
-  # Return the blocks the install freed. An RPM upgrade writes the new files and unlinks the
+  local g=(ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1") w want have krel mod
+  for w in $WANT_DRIVERS; do
+    want="$(tar --zstd -xOf "$PAYLOAD" "limina-guest-tools/limina-gpu-drivers/drivers/opt/limina/$w/MESA_REV")"
+    have="$("${g[@]}" "cat /opt/limina/$w/MESA_REV 2>/dev/null" || true)"
+    [ "$have" = "$want" ] || { echo "!!! /opt/limina/$w is mesa ${have:-absent}, payload has $want" >&2; ok=0; }
+  done
+  have="$("${g[@]}" "rpm -qa 'mesa-*' --qf '%{NAME}-%{VERSION}-%{RELEASE}\n' | grep limina" || true)"
+  [ -z "$have" ] || { echo "!!! limina mesa RPMs still installed: $have" >&2; ok=0; }
+  "${g[@]}" 'test ! -e /etc/environment.d/90-limina-zink.conf' ||
+    { echo "!!! the retired driver selection is still in /etc/environment.d" >&2; ok=0; }
+  # The installer names the 16k kernel it built the module for; the module must resolve to DKMS's
+  # there (extra/), not to one in updates/, which depmod ranks above it.
+  krel="$(sed -nE 's/.*virtio-gpu module built for ([^:]+):.*/\1/p' "$ilog")"
+  if [ -n "$krel" ]; then
+    mod="$("${g[@]}" "modinfo -k '$krel' -n virtio_gpu" || true)"
+    case "$mod" in
+      */extra/virtio-gpu.ko*) echo "verified: GPU drivers $WANT_DRIVERS; the $krel module is DKMS's" ;;
+      *) echo "!!! virtio_gpu for $krel resolves to ${mod:-nothing}, not DKMS's" >&2; ok=0 ;;
+    esac
+  else
+    echo "!!! the installer built no virtio-gpu module for the 16k kernel (log $ilog)" >&2; ok=0
+  fi
+
+  # Return the blocks the install freed. An upgrade writes the new files and unlinks the
   # old ones, which frees them in the GUEST filesystem while the host image keeps every block
   # it ever allocated — so each delivery leaves the golden a little slacker. That is not just
   # size: `l2_qga_fstrim` asserts a fresh 2048 MiB write GROWS the host file by at least half
