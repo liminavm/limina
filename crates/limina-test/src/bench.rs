@@ -77,6 +77,10 @@ pub struct GuestSample {
     pub pgsteal_direct: u64,
     /// kswapd0 CPU (utime+stime, clock ticks): how busy the reclaim daemon itself is.
     pub kswapd_cpu_ticks: u64,
+    /// `workingset_refault_file`/`_anon`: evicted pages read back while still in the
+    /// workingset window, in guest pages — a cache too small for what the guest re-reads.
+    pub workingset_refault_file: u64,
+    pub workingset_refault_anon: u64,
 }
 
 /// The CSV header the sampler writes and [`parse_guest_csv`] expects — one place, so the
@@ -84,10 +88,11 @@ pub struct GuestSample {
 const GUEST_CSV_HEADER: &str = "ts_ms,mem_total_kib,mem_free_kib,mem_available_kib,cached_kib,\
 swap_free_kib,mem_some_avg10,mem_some_total_us,mem_full_avg10,mem_full_total_us,io_some_avg10,\
 io_some_total_us,io_full_avg10,io_full_total_us,pgmajfault,pswpin,pswpout,pgscan_kswapd,\
-pgsteal_kswapd,pgscan_direct,pgsteal_direct,kswapd_cpu_ticks";
+pgsteal_kswapd,pgscan_direct,pgsteal_direct,kswapd_cpu_ticks,workingset_refault_file,\
+workingset_refault_anon";
 
 /// Column count of [`GUEST_CSV_HEADER`] (a row with any other arity is torn or stale).
-const GUEST_CSV_COLUMNS: usize = 22;
+const GUEST_CSV_COLUMNS: usize = 24;
 
 /// The in-guest 250 ms (configurable) sampler, run detached so it survives between ssh
 /// commands and samples while the guest is under pressure.
@@ -165,7 +170,8 @@ while True:
            v.get('pgmajfault', 0), v.get('pswpin', 0), v.get('pswpout', 0),
            v.get('pgscan_kswapd', 0), v.get('pgsteal_kswapd', 0),
            v.get('pgscan_direct', 0), v.get('pgsteal_direct', 0),
-           kswapd_ticks()]
+           kswapd_ticks(),
+           v.get('workingset_refault_file', 0), v.get('workingset_refault_anon', 0)]
     out.write(','.join(str(x) for x in row) + '\n')
     time.sleep({period_s})
 "#,
@@ -294,6 +300,8 @@ pub fn parse_guest_csv(csv: &str) -> Result<Vec<GuestSample>> {
             pgscan_direct: fields[19],
             pgsteal_direct: fields[20],
             kswapd_cpu_ticks: fields[21],
+            workingset_refault_file: fields[22],
+            workingset_refault_anon: fields[23],
         });
     }
     Ok(out)
@@ -711,6 +719,7 @@ pub fn real_report(guest: &Guest) -> Option<limina_proto::MemPressure> {
         mem_free_kib: mem_kib("MemFree:"),
         io_full_avg10: pct100(io_psi, "full", "avg10"),
         io_full_avg60: pct100(io_psi, "full", "avg60"),
+        ..Default::default()
     })
 }
 
@@ -1055,6 +1064,7 @@ mod tests {
         assert_eq!(s.pgscan_kswapd, 170);
         assert_eq!(s.pgsteal_direct, 200);
         assert_eq!(s.kswapd_cpu_ticks, 210);
+        assert_eq!(s.workingset_refault_anon, 230);
         // A foreign header is a broken pipeline, not an empty result.
         assert!(parse_guest_csv("bogus,header\n1,2\n").is_err());
     }

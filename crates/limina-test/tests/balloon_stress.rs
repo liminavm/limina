@@ -13,6 +13,9 @@
 //! - **cache**: let reclaim settle on an idle desktop, then re-read a cold file larger than what
 //!   that leaves the guest. Does the policy give memory back, or keep the guest thrashing (thrash
 //!   is io pressure; memory pressure stays quiet)?
+//! - **stream**: let reclaim settle, then read more than the whole guest once, as a backup does.
+//!   Nothing is re-read, so the cache is not too small for anything — the shape a give-back
+//!   trigger must not mistake for thrash.
 //! - **idle**: an idle desktop for `LIMINA_STRESS_IDLE_MIN` minutes (default 20). Does reclaim
 //!   settle, or keep reversing?
 //! - **host**: the host's level goes normal, warn, critical, normal (`LIMINA_HOST_PRESSURE=@file`).
@@ -23,7 +26,7 @@
 //!
 //! Gated: `LIMINA_BALLOON_BENCH=1` + HVF. `LIMINA_BENCH_TIER` (stock|enhanced),
 //! `LIMINA_STRESS_BACKENDS` (default `balloon,split`), `LIMINA_STRESS_MODES` (default `moderate`),
-//! `LIMINA_STRESS_SCENARIOS` (default `burst,cache,idle,host`), `LIMINA_STRESS_RATES` (burst
+//! `LIMINA_STRESS_SCENARIOS` (default `burst,cache,idle,host`; `stream` on request), `LIMINA_STRESS_RATES` (burst
 //! MiB/s, 0 = unthrottled; default `512,2048,0`). A window opens: run it alone.
 
 use std::path::{Path, PathBuf};
@@ -53,6 +56,10 @@ const SETTLE_QUIET: Duration = Duration::from_secs(90);
 /// Idle reclaim on a 2..8 GiB desktop measured ~5 min from first step to last.
 const SETTLE_WITHIN: Duration = Duration::from_secs(600);
 const THRASH_SECS: u64 = 180;
+/// The one-pass read: more than `MAX_MIB`, so nothing it reads can still be cached when it ends.
+const STREAM_MIB: u64 = 10240;
+/// Refault rates are judged over this window, the policy's PSI avg10 horizon.
+const REFAULT_WINDOW_MS: u64 = 10_000;
 /// How much the policy must have reclaimed before a burst starts.
 const RECLAIMED_FLOOR: u64 = 2048 * MIB;
 /// /var/tmp, not /tmp: Fedora's /tmp is tmpfs, whose pages are not reclaimable page cache.
@@ -98,7 +105,7 @@ fn points() -> Vec<Point> {
                         .iter()
                         .map(|r| r.parse().expect("a rate in MiB/s"))
                         .collect(),
-                    "cache" | "idle" | "host" => vec![0],
+                    "cache" | "stream" | "idle" | "host" => vec![0],
                     other => panic!("unknown scenario {other:?}"),
                 };
                 for rate_mib_s in rates {
@@ -319,7 +326,39 @@ fn psi(samples: &[GuestSample], from: u64, to: u64) -> Vec<(&'static str, String
             "pgsteal_direct",
             counter_delta(samples, |s| s.pgsteal_direct, from, to).to_string(),
         ),
+        (
+            "refault_file",
+            counter_delta(samples, |s| s.workingset_refault_file, from, to).to_string(),
+        ),
+        (
+            "refault_file_peak_per_s",
+            peak_rate(samples, |s| s.workingset_refault_file, from, to).to_string(),
+        ),
+        (
+            "refault_anon",
+            counter_delta(samples, |s| s.workingset_refault_anon, from, to).to_string(),
+        ),
     ]
+}
+
+/// The highest per-second rate of a counter over any [`REFAULT_WINDOW_MS`] span in `from..to`.
+fn peak_rate(samples: &[GuestSample], f: impl Fn(&GuestSample) -> u64, from: u64, to: u64) -> u64 {
+    let span: Vec<_> = samples
+        .iter()
+        .filter(|s| s.ts_ms >= from && s.ts_ms <= to)
+        .collect();
+    let mut peak = 0;
+    let mut j = 0;
+    for (i, s) in span.iter().enumerate() {
+        while span[j].ts_ms + REFAULT_WINDOW_MS < s.ts_ms {
+            j += 1;
+        }
+        let ms = s.ts_ms - span[j].ts_ms;
+        if i > j && ms >= REFAULT_WINDOW_MS / 2 {
+            peak = peak.max(f(s).saturating_sub(f(span[j])) * 1000 / ms);
+        }
+    }
+    peak
 }
 
 fn burst(bench: &BenchRun, p: &Point) -> String {
@@ -441,6 +480,53 @@ fn cache(bench: &BenchRun, p: &Point) -> String {
     })
 }
 
+fn stream(bench: &BenchRun, p: &Point) -> String {
+    let mut run = Run::boot(bench, p);
+    let (held_at_start, settled) = run.settle();
+    // Detached, so the host side keeps being sampled while it runs.
+    run.guest
+        .ssh_exec(&format!(
+            "rm -f {THRASH_OUT}; setsid nohup bash -c 'sudo dd if=/dev/vda of=/dev/null bs=1M \
+             count={STREAM_MIB} status=none; echo done > {THRASH_OUT}' </dev/null >/dev/null 2>&1 & \
+             echo spawned"
+        ))
+        .expect("starting the one-pass read");
+    let t0 = now_ms();
+    let deadline = Instant::now() + Duration::from_secs(900);
+    loop {
+        run.watch_for(Duration::from_secs(5));
+        let done = run
+            .guest
+            .ssh_exec(&format!("cat {THRASH_OUT} 2>/dev/null"))
+            .unwrap_or_default();
+        if done.trim() == "done" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{}: the one-pass read never finished",
+            run.tag
+        );
+    }
+    let end = now_ms();
+    let held_end = run.host.last().map(HostSample::held).unwrap_or(0);
+    run.finish(|samples, trace| {
+        let givebacks = trace
+            .iter()
+            .filter(|e| e.ts_ms >= t0 && e.decision == "giveback")
+            .count();
+        let mut extra = vec![
+            ("held_at_start_mib", (held_at_start / MIB).to_string()),
+            ("settled", settled.to_string()),
+            ("held_end_mib", (held_end / MIB).to_string()),
+            ("stream_ms", (end - t0).to_string()),
+            ("givebacks", givebacks.to_string()),
+        ];
+        extra.extend(psi(samples, t0, end));
+        extra
+    })
+}
+
 fn idle(bench: &BenchRun, p: &Point) -> String {
     let minutes: u64 = std::env::var("LIMINA_STRESS_IDLE_MIN")
         .ok()
@@ -518,6 +604,7 @@ fn balloon_stress_on_a_seated_desktop() {
         let json = match p.scenario.as_str() {
             "burst" => burst(&bench, &p),
             "cache" => cache(&bench, &p),
+            "stream" => stream(&bench, &p),
             "idle" => idle(&bench, &p),
             "host" => host(&bench, &p),
             _ => unreachable!(),
