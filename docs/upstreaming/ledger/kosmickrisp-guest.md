@@ -2,7 +2,7 @@
 # kosmickrisp-guest — upstreaming ledger
 
 `liminavm/mesa` `metal-native-context` branch (`third_party/manifest.toml [kosmickrisp-guest]`),
-pin `23a28823ed4`, base `059715d2aa5` — the `[kosmickrisp]` (`limina-kk`) pin. The series is the
+pin `1b9049a75d7`, base `059715d2aa5` — the `[kosmickrisp]` (`limina-kk`) pin. The series is the
 host KosmicKrisp branch plus guest-only commits: the KosmicKrisp driver on the limina
 native-context transport (the limina bridge) inside the guest, the guest WSI, and the venus,
 virgl, zink and VA fixes the guest needs. A vendor build (`-Dlimina-vendor`) drives every
@@ -74,6 +74,7 @@ before/after table and the MR draft.
 | 0016 | egl/dri2: fail eglExportDMABUFImageMESA when the driver cannot export an fd | `egl_dri2.c` |  | needed | b39d173ca93 | none-yet | none-yet | to-decide | no | standalone | guest-enhanced (generic) | **upstream-now** | `Fixes: 8f7338f284c`. Fd-table exhaustion repro: main returns EGL_TRUE with a stale fd 3/3 (virgl and zink-on-venus), fix EGL_FALSE. `egl-export-fd-failure/` |
 | 0017 | vl/compositor: upload the matrix the frontend set, not the init default | `vl_compositor*.c/h` |  | needed (narrowed) | b39d173ca93 | none-yet | none-yet | to-decide | no | standalone | guest-enhanced (generic) | **upstream-now** | `f5eb8ab7151` fixed RGB→RGB / YUV→RGB; RGB→YUV and 1-component identity still use the seed. `Fixes: f5eb8ab7151`. Stock vrend renders every conversion black (two unrelated host-side faults), so no before/after pixels on QEMU. `vl-compositor-matrix/` |
 | 0020 | virgl: don't wait for a read-only map of a clean resource | `virgl_resource.c` |  | needed | 5d4c4bd553a | n/a | none-yet | to-decide | no | standalone | guest-enhanced (generic) | **upstream-now** | `glTexSubImage2D` from a PBO waits for the host on every call: with no blit-based transfers the PBO is mapped for reading on the CPU while the transfer of the data just written is queued. Skips the wait for a read-only map that needs no readback (every host-side write marks the resource dirty); blob resources still wait. Stock QEMU: 1.1 → 0.18 ms per upload, the same as client memory, all tiles verified; piglit buffer/PBO/texture-transfer groups no regressions. Firefox Canvas Test on limina: PBO path −27% vs CPU pointer on stock Mesa, −1.2% (noise) with the fix. Opting virgl into blit-based transfers also removes the waits but loses the uploads on vrend. Upstream form on `wip/virgl-pbo-wait`, not on `upstream/guest-2026-10`. `virgl-pbo-upload-wait/` |
+| — | venus: don't dereference a missing bo when reporting a failed allocation | `vn_device_memory.c` |  | needed | 059715d2aa5 | none-yet | none-yet | to-decide | no | standalone | guest-enhanced (generic) | **upstream-now** | regression from upstream `78f9b71dd7c`, which moved the `memory_reports` early return into `vk_device_memory_report_emit()`: `vn_device_memory_emit_report()` now reads `mem->base_bo->res_id` for a failed import or exportable allocation, whose `base_bo` is NULL, so a refused dma-buf import segfaults `vkAllocateMemory` instead of returning `VK_ERROR_INVALID_EXTERNAL_HANDLE`. Any venus guest with a host that refuses an import hits it; on limina `refused_venus_import_leaves_the_context_alive` (`vkudmabufimport.py Venus forcealloc`) |
 
 ## Send queue
 

@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 // Copyright © 2026 Gustavo Noronha Silva
 
-//! limina's vendor GPU drivers take a guest's desktop when the host offers the transport, and
-//! stand aside when it does not.
+//! limina's vendor GPU drivers take a guest's desktop on every virtio-gpu, driving it through
+//! KosmicKrisp when the host offers the transport and through virgl and venus when it does not.
 //!
 //! The drivers are installed beside the system's Mesa and nothing in the environment selects
-//! them: every entry point asks the device whether it is a limina transport speaking its protocol
-//! and declines otherwise (docs/design/metal-transport-delivery.md §1). Both answers matter. A
-//! driver that never accepts is dead weight; one that accepts a device it cannot drive breaks a
-//! guest that merely moved to a host without the transport, which the two-tier guarantee forbids.
-//! So the same installed image boots twice, and each boot must land wholly on one side:
+//! them: every entry point asks the device what it is (docs/design/metal-transport-delivery.md
+//! §1). Both answers matter. A driver that never accepts the transport is dead weight; one that
+//! takes the transport's path on a host without it breaks a guest that merely moved, which the
+//! two-tier guarantee forbids. So the same installed image boots twice, and each boot must land
+//! wholly on one side:
 //!
 //! - **With the transport:** gnome-shell on our EGL vendor and GBM backend, GL clients on zink
 //!   over KosmicKrisp in the guest, and KosmicKrisp enumerating a Vulkan device.
-//! - **Without it:** gnome-shell maps nothing of ours, GL clients get stock virgl, KosmicKrisp
-//!   enumerates nothing, and the renderer serves the boot without refusing any work.
+//! - **Without it:** gnome-shell on the same EGL vendor and GBM backend, GL clients on our virgl,
+//!   Vulkan's first device our venus, KosmicKrisp enumerating nothing, and the renderer serving
+//!   the boot without refusing any work.
 //!
 //! Both must also put a real desktop on screen with its colours the right way round. The F44
 //! default wallpaper's lower part is blue; a scanout whose red and blue channels are swapped reads
@@ -131,8 +132,8 @@ fn vendor_drivers_take_the_desktop_on_the_transport() {
 }
 
 #[test]
-fn vendor_drivers_stand_aside_without_the_transport() {
-    const TEST: &str = "vendor_drivers_stand_aside_without_the_transport";
+fn vendor_drivers_serve_virgl_and_venus_without_the_transport() {
+    const TEST: &str = "vendor_drivers_serve_virgl_and_venus_without_the_transport";
     let cfg = match GuestConfig::metal_image_efi_fedora_from_env() {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -148,21 +149,27 @@ fn vendor_drivers_stand_aside_without_the_transport() {
         "the module found the limina extension on a host that does not offer it"
     );
     assert!(
-        stack.shell_on_stock_drivers(),
-        "gnome-shell loaded the vendor drivers without the transport: {:#?}",
+        stack.shell_on_vendor_drivers(),
+        "gnome-shell is not on the vendor EGL and GBM drivers: {:#?}",
         stack.shell_maps
     );
     assert!(
         stack.gl_on_virgl(),
-        "a GL client is not on stock virgl: {:?}",
+        "a GL client is not on virgl: {:?}",
         stack.gl_renderer
+    );
+    assert!(
+        stack.vk_first_is_vendor_venus(),
+        "Vulkan's first device is not the vendor drivers' venus: {:?} {:?}",
+        stack.vk_drivers,
+        stack.vk_driver_infos
     );
     assert!(
         !stack.vk_has_kosmickrisp(),
         "KosmicKrisp enumerates a device without the transport: {:?}",
         stack.vk_drivers
     );
-    limina_test::renderer::assert_renderer_served(&g.supervisor_log(), "on the stock desktop");
+    limina_test::renderer::assert_renderer_served(&g.supervisor_log(), "on the virgl desktop");
     let outcome = g.shutdown(Duration::from_secs(30)).expect("shutting down");
     eprintln!("teardown outcome: {outcome:?}");
 }

@@ -71,6 +71,8 @@ pub struct Stack {
     pub gl_renderer: String,
     /// Every Vulkan driver the loader enumerates a device for, by driver name.
     pub vk_drivers: Vec<String>,
+    /// The same devices' `driverInfo`, in the same order.
+    pub vk_driver_infos: Vec<String>,
 }
 
 impl Stack {
@@ -99,17 +101,23 @@ impl Stack {
             .split_once("GL_RENDERER:")
             .map(|(_, r)| r.trim().to_string())
             .unwrap_or_default();
-        let vk_drivers = g
-            .ssh_exec("timeout 30 vulkaninfo --summary 2>/dev/null | grep driverName || true")?
-            .lines()
-            .filter_map(|l| l.split_once('=').map(|(_, d)| d.trim().to_string()))
-            .collect();
+        let vk = g.ssh_exec(
+            "timeout 30 vulkaninfo --summary 2>/dev/null | grep -E 'driverName|driverInfo' || true",
+        )?;
+        let field = |name: &str| -> Vec<String> {
+            vk.lines()
+                .filter_map(|l| l.split_once('='))
+                .filter(|(k, _)| k.trim() == name)
+                .map(|(_, v)| v.trim().to_string())
+                .collect()
+        };
         Ok(Stack {
             module,
             extension,
             shell_maps,
             gl_renderer,
-            vk_drivers,
+            vk_drivers: field("driverName"),
+            vk_driver_infos: field("driverInfo"),
         })
     }
 
@@ -129,20 +137,12 @@ impl Stack {
         has("libEGL_limina.so.0.0.0") && has("gbm/dri_gbm.so")
     }
 
-    /// gnome-shell maps nothing of ours.
-    pub fn shell_on_stock_drivers(&self) -> bool {
-        !self
-            .shell_maps
-            .iter()
-            .any(|m| m.starts_with("/opt/limina/"))
-    }
-
     /// GL clients get the vendor driver: zink on KosmicKrisp in the guest, not virgl.
     pub fn gl_on_vendor_driver(&self) -> bool {
         self.gl_renderer.starts_with("zink ") && self.gl_renderer.contains("KOSMICKRISP")
     }
 
-    /// GL clients get stock virgl.
+    /// GL clients get virgl.
     pub fn gl_on_virgl(&self) -> bool {
         self.gl_renderer.starts_with("virgl (")
     }
@@ -150,5 +150,14 @@ impl Stack {
     /// The vendor Vulkan driver enumerates a device.
     pub fn vk_has_kosmickrisp(&self) -> bool {
         self.vk_drivers.iter().any(|d| d == "KosmicKrisp")
+    }
+
+    /// The first Vulkan device is the vendor drivers' venus, which marks its `driverInfo`.
+    pub fn vk_first_is_vendor_venus(&self) -> bool {
+        self.vk_drivers.first().is_some_and(|d| d == "venus")
+            && self
+                .vk_driver_infos
+                .first()
+                .is_some_and(|i| i.ends_with("(limina)"))
     }
 }
