@@ -21,9 +21,9 @@
   dogfood Mac.
 - The worker carries `com.apple.security.hypervisor` (plus two hardened-runtime hatches, see
   §2.1(a)); tests codesign it per-build.
-- Guest tools are an out-of-band tarball (`limina-guest-tools-<ver>.tar.zst`) built by
-  `scripts/provision/f44/build-all.sh` and installed by `install-enhanced.sh` run manually
-  in the guest ([[limina-enh-delivery]]).
+- Guest tools are an out-of-band tarball (`limina-guest-tools-f44-rNN.tar.zst`) assembled on
+  the host by `scripts/package-enhanced.sh` and installed by `install-enhanced.sh` run manually
+  in the guest (`docs/images.md` §Delivery).
 
 Every gap below is between this and "a stranger downloads limina and it just works."
 
@@ -133,12 +133,15 @@ Wrinkles to design around when it's built:
 
 ## 5. Guest-tools delivery from the app
 
-The enhanced payload (kernel + mesa + mutter RPMs + agents + installer) is **not bundled**
-in the app (it is Fedora-release-specific and ~app-sized itself). Design:
+The enhanced payload (16 KiB kernel RPM + `-devel`, the GPU vendor drivers + DKMS module, agents,
+installer) is **not bundled** in the app (the kernel is Fedora-release-specific, and the payload
+is ~app-sized itself). Design:
 
 - Each release publishes `limina-guest-tools-<ver>-<distro>.tar.zst` next to the DMG, with
   a **manifest** (payload version, target `/etc/os-release` IDs, component versions,
-  sha256 per file) — the manifest is the missing version-check the backlog tracks.
+  sha256 per file). `package-enhanced.sh` already writes a `manifest.txt` with the revision,
+  kernel, drivers' Mesa revs and agent hashes; the target IDs, per-file hashes and the guest-side
+  check are the missing version-check the backlog tracks.
 - **`limina install-guest-tools [<vm>]`**: downloads (or takes `--payload PATH`), verifies
   checksum + manifest↔guest `/etc/os-release` match, stages it into an ephemeral read-only
   `--share`, and runs the installer in the guest — via the agent when present, else by

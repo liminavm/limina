@@ -27,7 +27,7 @@ the `virtio_pci` that every generic Parallels→KVM guide tells you to add.
 | Decision | Choice | Why |
 |---|---|---|
 | Migrate the real disk vs. fresh install + rsync `/home` | **Migrate the real disk** | Highest-fidelity dogfooding; forces us to live the (currently undocumented) import story. Fall back to fresh-install only if `gdisk` shows the disk is MBR/BIOS (won't EFI-boot). |
-| Fedora 44 now vs. switch to F43 | **F44, basic tier first** | Stock F44 is a verified limina baseline (`docs/images.md`). The basic tier is the bootstrap substrate, so we start there and layer enhanced on top. F44 enhanced (16k kernel + venus mesa + patched mutter 50.1) is now **validated end-to-end** (2026-06-29, `docs/images.md`) — the feared GNOME 49→50 mutter/cogl regression did **not** reproduce — so the enhanced upgrade (§4) is available, not a blocker. |
+| Fedora 44 now vs. switch to F43 | **F44, basic tier first** | Stock F44 is a verified limina baseline (`docs/images.md`). The basic tier is the bootstrap substrate, so we start there and layer enhanced on top. F44 enhanced (16k kernel + limina's GPU drivers + agents) is **validated end-to-end** (`docs/images.md`), so the enhanced upgrade (§4) is available, not a blocker. |
 | First-boot observability | **Windowed GOP + `--console` serial** | A migration boot is exactly when you want eyes on GRUB + early KMS, and the serial log catches a dracut-shell drop. |
 | SELinux relabel | **Migrate as-is (Enforcing); relabel only if it loops** | A Parallels Fedora install is a real Fedora install with labels intact; preemptive permissive needlessly weakens a daily driver. |
 
@@ -198,42 +198,32 @@ cp -c Fedora-Workstation-44.migrated.raw migrated-clone.raw
 
 ## 4. Enhanced tier (later)
 
-Once the basic tier is a stable daily driver, the enhanced components (16k kernel, venus
-mesa, patched mutter, limina-agent) layer in. Delivery is an **out-of-band, versioned
-`limina-guest-tools` payload** (the RPM sets + `install-enhanced.sh` + the prebuilt
-`limina-agent` + a manifest) pushed into the guest over **virtiofs `--share`** — which needs
-no network and works on a stock guest with no agent yet.
+Once the basic tier is a stable daily driver, the enhanced components (16k kernel, limina's GPU
+drivers, `limina-agent` and `limina-agent-session`) layer in. The guest keeps its own Mesa,
+mutter and gnome-shell; the GPU drivers install beside the distro's Mesa under `/opt/limina` and
+drive every virtio-gpu. Delivery is an **out-of-band, versioned `limina-guest-tools` payload**
+(the kernel RPM + `-devel`, `limina-gpu-drivers/` with the DKMS virtio-gpu module, the musl
+agents, `install-enhanced.sh` and a manifest), pushed into the guest over **virtiofs `--share`**
+— which needs no network and works on a stock guest with no agent yet.
 
-**Build the payload once** in a **separate, disposable F44 guest** — *not* the daily driver, since
-the build leaves multi-GB of RPMs, sources and (debug-symbol) artifacts behind. Get the limina repo
-into that guest (git clone over `--net`, or `--share` it from the host), then run
-`scripts/provision/f44/build-all.sh` — it self-installs its build deps (`dnf builddep` + `cargo`)
-and assembles `~/limina-guest-tools`: the kernel/mesa/mutter RPMs + the prebuilt `limina-agent` + its
-unit + the flat-pointer gschema override + `install-enhanced.sh` + a manifest. Building in an F44
-guest from F44's **own** SRPMs is what keeps the mesa/mutter RPM versions matched to your
-daily-driver guest (no soname mismatch). Then ship `~/limina-guest-tools` to the daily-driver guest
-over `--share`:
+**Build the payload on the dev Mac**, not in the guest: `cargo xtask enhanced` (the kernel),
+`scripts/build-gpu-drivers.sh` + `scripts/package-gpu-drivers.sh` (the drivers), then
+`scripts/package-enhanced.sh rNN` — the full procedure is `docs/images.md`. Unpack the tarball
+and ship the `limina-guest-tools/` directory to the daily-driver guest over `--share`:
 
 ```bash
-limina --window --disk <persistent-guest>.raw --share guest-tools=$HOME/limina-guest-tools:ro
+tar --zstd -xf payload/limina-guest-tools-f44-rNN.tar.zst -C <dir>
+limina --window --disk <persistent-guest>.raw --share guest-tools=<dir>/limina-guest-tools:ro
 # in the guest, as root:
 mkdir -p /media/guest-tools && mount -t virtiofs limina-guest-tools /media/guest-tools
-sudo /media/guest-tools/install-enhanced.sh /media/guest-tools   # kernel+mesa+mutter+agent, then reboot
+sudo /media/guest-tools/install-enhanced.sh /media/guest-tools   # kernel, GPU drivers, agents; then reboot
 ```
 
-`install-enhanced.sh` now also installs `limina-agent` (+ unit + flat-pointer gschema
-override) and runs `restorecon`, so the whole upgrade rides the one offline channel — stage
-those three files into the payload alongside the RPMs.
+The installer reaches for the network when the guest lacks a prerequisite (DKMS's `dkms`, `gcc`,
+`make`, or the drivers' Vulkan loader and glvnd EGL). It boots the 16k kernel once on trial and promotes it on success.
 
-> **F44 enhanced tier — VALIDATED (2026-06-29).** The full stack works on F44: the 16k kernel,
-> venus mesa (`26.1.3-1.limina`, F44 SRPM + venus patches), and patched mutter (`50.1-1.limina`,
-> `patches/mutter/0001`+`0002`+`0003`). venus renders the seated GNOME desktop at ~60fps
-> (venus→KK→Metal) and the venus L2 suite is **GREEN 7/7**; the feared GNOME 49→50 cogl/scanout
-> "regression" / `kk_encoder.c:299` assert did **not** reproduce on the clean stack — no F43
-> fallback needed.
->
-> **Known limitation:** GLX/Xwayland apps present **black** on venus (the X11 kopper present
-> path — rendering works, presentation doesn't); Wayland-native GL (Firefox WebGL, etc.) is fine.
+> **Known limitation:** GLX clients under Xwayland and Flatpaks keep the distro's Mesa, so they
+> get neither the vendor drivers' GL nor their H.264/HEVC VA-API decode.
 
 ---
 

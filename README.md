@@ -57,7 +57,7 @@ repo? Read [`docs/dev-onboarding.md`](docs/dev-onboarding.md).
 | `guest/` | aarch64-linux guest components (their own workspace): `limina-agent` (+ session helper), `limina-init`, `limina-mock-mutter` (test double), the stock-kernel virtio-gpu DKMS driver |
 | `xtask/` | The `cargo xtask` dev-task runner |
 | `scripts/` | The tested build/boot/provision scripts xtask wraps |
-| `patches/` | Mostly tombstones from the pre-fork-model days; the one live series is `mesa-guest/`, an export of the guest Mesa fork consumed by the RPM build (never hand-edited) |
+| `patches/` | Tombstones, plus reference-only Mesa patches; every live delta is a commit on a fork branch pinned in `third_party/manifest.toml` |
 | `spikes/` | Standalone experiments (each with a `RESULTS.md`) |
 | `docs/` | [research](docs/research/) (source-cited), [design](docs/design/), [roadmap](docs/roadmap.md), [images](docs/images.md), [codebases](docs/codebases.md) |
 | `third_party/` | The forked dependencies at their pinned revs (gitignored; recreated by `cargo xtask vendor`; `manifest.toml` is the tracked pin list) |

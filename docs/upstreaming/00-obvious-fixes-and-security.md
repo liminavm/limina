@@ -111,6 +111,9 @@ is clamped — see §2B, top item.
 
 ## guest mesa → Mesa
 
+The fixes below that are still carried live on `metal-native-context` (`[kosmickrisp-guest]`);
+their current status is in `docs/upstreaming/ledger/kosmickrisp-guest.md`.
+
 > **Not security fixes — do not confuse with the panic→graceful class.** These run
 > *inside the guest*; a NULL deref here crashes a guest process (gnome-shell, a
 > `util_queue` thread), which is the guest harming its own graphics stack — **no
@@ -141,8 +144,8 @@ is clamped — see §2B, top item.
 
 ## linux → dri-devel  *(verify-first, not "obvious")*
 
-None qualify as obvious fixes as-is. `provision/f44/README.md:71` flags all four as
-"may already be upstream in F44's kernel" — **check drm-misc-next before sending.**
+None qualify as obvious fixes as-is. Any of the four may already be upstream in F44's
+kernel — **check drm-misc-next before sending.**
 0001/0003 are the closest (near-ready per README) but are feature-shaped and carry host
 couplings (§3). 0004 is a fix in intent but upstream would want a negotiated granule,
 not a hardcoded 16 KiB.

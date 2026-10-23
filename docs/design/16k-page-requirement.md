@@ -5,11 +5,11 @@ it — is fixed host-side.** 16 KiB stays as *the* enhanced tier because it is b
 anything is impossible without it. A stock distro working unaided is now gated on one piece of
 *userspace* upstream work rather than a chain of five (§ "Just works on a regular distro").
 
-The enhanced kernel RPM's only load-bearing difference from Fedora's is one config symbol,
-`CONFIG_ARM64_16K_PAGES=y` (`scripts/provision/f44/build-kernel-rpm.sh:10`): the `liminavm/linux`
-`limina` branch went zero-delta when the `page_reporting` freezable-wq UAF fix landed in stable. So
-the honest question is whether that one symbol still earns a multi-GB build, and the answer is that
-it earns it on performance alone.
+The enhanced kernel RPM's only load-bearing page-size difference from Fedora's is one config
+symbol, `CONFIG_ARM64_16K_PAGES=y` (`scripts/provision/f44/build-kernel-rpm.sh:11`); the
+`liminavm/linux` `limina` branch carries two virtio-gpu commits (`docs/upstreaming/ledger/linux.md`). So the honest question is whether
+that one symbol still earns a multi-GB build, and the answer is that it earns it on performance
+alone.
 
 ## What actually drove the requirement, and what closed it
 
@@ -154,9 +154,9 @@ with the host-side scan above as the safety net, so a guest that ignores it stil
 A stock distro now boots to venus with **nothing installed into it** — the granule is a host
 setting. What remains on the list is one item, and it is about resilience rather than capability:
 
-1. **Mesa: venus degrades to its stub instance when ring setup fails.** Our series patch 0003
-   (`d517a1b49d1`), the one that converts "all Vulkan dead" into "llvmpipe works". Not upstream;
-   `docs/upstreaming/ledger/mesa.md` has it queued as Wave 1. The granule fix removed the failure
+1. **Mesa: venus degrades to its stub instance when ring setup fails.** Our guest Mesa's 0003,
+   the one that converts "all Vulkan dead" into "llvmpipe works". Not upstream;
+   `docs/upstreaming/ledger/kosmickrisp-guest.md` has it `upstream-now`, early in the send queue. The granule fix removed the failure
    that used to trigger this on every stock guest, so it is no longer *load-bearing* for the stock
    tier — but the loader still amplifies any venus failure into total Vulkan loss, and this is the
    patch that stops it. It remains the highest-value upstream item here.
@@ -193,7 +193,7 @@ upstream patch measurable in the same unit: does it remove something from the pa
 |---|---|---|
 | **`limina-agent`** + `limina-agent-session` | clipboard, dynamic memory reporting, timesync, FIDO, lifecycle — our control plane | **nothing. This is the permanent floor**, and the target end state is that it is the *only* thing we ship. |
 | **`limina-kernel-16k`** | 16 KiB pages (one config symbol — the fork branch carries zero patches as of v7.1.8) | for the *stock* tier: **nothing left** — a stock 4 KiB guest gets venus from the host's granule setting, and pays 4-8% on CPU-bound work for it. For the *enhanced* tier: nothing — we keep building it deliberately, for that 4-8%. |
-| **mesa RPM** (8 venus/virgl/zink patches) | venus correctness + WSI + the CPU-write coherency fix | all 8 landing upstream and reaching a distro release. Four are already flagged **upstream-now** in `docs/upstreaming/ledger/mesa.md` (rows 0012, 0013, 0007, 0008); the rest need design work or a conversation. |
+| **GPU vendor drivers** (`/opt/limina/<wire>/`, `guest/gpu-drivers`) | the Metal transport's KosmicKrisp + zink; venus/virgl/zink/VA correctness + WSI fixes; H.264/HEVC VA decode | the fixes: landing upstream and reaching a distro release — the **upstream-now** rows of `docs/upstreaming/ledger/kosmickrisp-guest.md`; the rest need design work or a conversation. The Metal transport and the H.264/HEVC decoders a distro Mesa leaves out: nothing — they stay ours. |
 | **`guest/virtio-gpu-dkms`** | 16 KiB blob-offset lattice on stock 4 KiB guests | **retired 2026-08-27** by the 4 KiB stage-2 granule. Never wired into the payload; kept as a lab artifact only. |
 | **`clipboard@limina`** shell extension | GNOME has no `ext-data-control`, so an unfocused agent cannot touch the clipboard | **M12 — `spice-vdagent`.** This row converges *better* than any other, because the guest component is already installed: `spice-vdagent` ships in the default Fedora Workstation set (verified in the dogfood guest's rpmdb, `0.23.0-1.fc43.aarch64`) and sits dormant purely for want of a named virtio-serial port. Waking it is **~40 lines of host-side limina code** — no guest component, and (contrary to the roadmap's original premise) no new libkrun device either, since `PortConfig::InOut` already announces `VIRTIO_CONSOLE_PORT_NAME`. Spike #1 was GREEN on an unmodified F43 guest with zero limina components. **LANDED 2026-08-15 (#37)**: the host-side broker ships, `limina-agent-session` yields the clipboard wherever a live `spice-vdagent` serves the session, and the extension was deleted — this row is closed, exactly as predicted. |
 
@@ -259,7 +259,8 @@ declaring.
 
 **Treat "a stock distro needs only the agent" as an explicit goal with a scoreboard.** The table
 above is that scoreboard: each upstream landing removes a row. The venus/kernel rows are gone; what
-is left is the mesa RPM, and the one upstream item that makes a venus failure survivable.
+is left is the GPU vendor drivers' fixes, and the one upstream item that makes a venus failure
+survivable.
 
 **Do not let the goal overstate itself.** A stock guest today gets venus, clipboard and the rest —
 but it gets *degraded* venus resilience (a failure still takes the whole loader down) and it pays

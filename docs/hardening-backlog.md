@@ -829,12 +829,12 @@ today (the venus trigger is fixed), but it is an upstream GTK bug worth reportin
 ## GPU correctness
 
 ### Every missing venus reply reaches the guest app as `VK_ERROR_OUT_OF_HOST_MEMORY`
-The `limina-guest` commit "venus: surface ring loss as VK_ERROR_DEVICE_LOST instead of abort()"
+The `[kosmickrisp-guest]` commit "venus: surface ring loss as VK_ERROR_DEVICE_LOST instead of abort()"
 makes a submit on a FATAL ring return `VK_ERROR_DEVICE_LOST` from the ring layer, but
 the generated `vn_call_*` (`vn_protocol_driver_*.h`: `dec ? decode : VK_ERROR_OUT_OF_HOST_MEMORY`)
 still turns any absent reply into OOM. Reply-pool allocation failure, ring FATAL at submit, ring FATAL
 while waiting and a real host refusal all reach the app as one code — the mechanical root of "OOM out
-of venus is never memory". Fix, guest-side and upstreamable (`limina-guest`): carry the submit's
+of venus is never memory". Fix, guest-side and upstreamable (`[kosmickrisp-guest]`): carry the submit's
 result into `vn_ring_submit_command` and have `vn_call_*` return it when the reply is absent. Cheap,
 and it makes the next dogfood OOM report classify itself.
 
@@ -861,7 +861,7 @@ in every stage. They skipped before GS. Not a vrend translation bug: host GLES h
 and vrend sets `has_fp64` only on the desktop flavour. Fix shape, two halves:
 - **Host, limina-only:** let ES contexts in host Mesa enable `ARB_gpu_shader_fp64` (no ES spec has
   doubles, so it is carried, never upstreamed); vrend then sets `has_fp64` on the GLES flavour.
-- **Guest, one line on `limina-guest`:** fake only when the host lacks fp64,
+- **Guest, one line on `[kosmickrisp-guest]`:** fake only when the host lacks fp64,
   `HOST_IS_GLES && !has_fp64`. It reuses an existing caps bit, so no protocol change, and is an
   upstream candidate. Stock guests keep the zeros they get today.
 
@@ -875,7 +875,7 @@ venus read the buffer's previous contents: the write reaches the host as a contr
 libkrun's gpu worker thread, venus reads on its own ring thread, and nothing orders the two. The fix
 takes two halves: guest mesa virgl flushes and waits for the bo to idle on unmap of a write map of a
 `PIPE_BIND_SHARED` resource ("virgl: settle a CPU write into a shared resource before unmap
-returns" on `limina-guest`), and the host finishes the upload before the virtio-gpu
+returns" on `[kosmickrisp-guest]`), and the host finishes the upload before the virtio-gpu
 fence signals. Under the C renderer the guest half alone still failed the first write after boot in 5
 of 6 boots; both together failed 0 of 7 (measured 2026-08-14). Owed:
 - **Re-run the reproducer under virglrs.** The host half was a C-vrend change; virglrs's fence path
@@ -1174,7 +1174,7 @@ each deferred by choice when GS landed:
   against the test's absolute 1e-6 on values near 11, about 1 ulp.
 - **`point-size-out`, `redeclare-pervertex-out-subset-gs`**: a guest zink bug, not KK.
   `delete_psiz_store` drops 1.0 point-size stores in a GS that emits more than once; it should drop
-  them only when every store is constant 1.0 (a `limina-guest` change, and an upstream one).
+  them only when every store is constant 1.0 (a `[kosmickrisp-guest]` change, and an upstream one).
 - **`fbo-cubemap-array`** fails on the venus tier only, with GS off as well: every layer reads layer
   0. The host stack and the vrend tier pass (`spikes/kk-gs/cube-array-layers.c`).
 - **`tes-primitiveid`** counts 24 invocations where 16 are expected: quads drawn as non-indexed
@@ -1345,24 +1345,34 @@ three-plane formats tie above NV12 and the last advertised (IYUV) wins. Firefox'
 only NV12/P010, logs `Unsupported VA-API surface format 808596553` (I420), destroys its frame pool and
 decodes in software on every stream, codec-independent. Chrome and GStreamer choose NV12 themselves;
 I420 decode itself is correct (framemd5 bit-identical to software), which is why
-`ffmpeg -hwaccel vaapi` hides it. The enhanced tier carries the fix ("virgl: do not offer
-three-plane 4:2:0 as a decode target" on `limina-guest` withholds YV12/IYUV for
+`ffmpeg -hwaccel vaapi` hides it. The enhanced tier's vendor drivers carry the fix ("virgl: do not offer
+three-plane 4:2:0 as a decode target" on `[kosmickrisp-guest]` withholds YV12/IYUV for
 `PIPE_VIDEO_ENTRYPOINT_BITSTREAM`). Owed: send it upstream so stock Firefox gets the hardware path —
 stock images load vanilla mesa, and libva probes `/usr/lib64/dri-freeworld/` ahead of
-`/usr/lib64/dri/`, so RPM Fusion's unpatched `mesa-va-drivers-freeworld` wins even where ours is
-installed. Its upstream form is ready on `upstream/guest-2026-10`; the ledger
-(`docs/upstreaming/ledger/mesa.md`) has it `upstream-now` with no issue or MR yet, and no upstream
+`/usr/lib64/dri/`, so where RPM Fusion is installed its unpatched `mesa-va-drivers-freeworld` loads.
+Its upstream form is ready on `upstream/guest-2026-10`; the ledger
+(`docs/upstreaming/ledger/kosmickrisp-guest.md`) has it `upstream-now` with no issue or MR yet, and no upstream
 suite test, since no stock host enables virgl video decode, so the case rests on the code and
 ffmpeg's exact-match selection. The durable fix is a virgl wire query for per-codec decode-target
 formats (the protocol has none). Unchecked: other VA-DMABUF consumers (GStreamer `vaapisink`,
 Chromium's other paths). Stock-tier validation vehicles: Chrome and GStreamer
 (`docs/design/h264-hevc-decode.md`).
 
+### Enhanced-tier H.264/HEVC decode reaches only VA clients that load our driver
+The vendor drivers' VA driver carries the H.264/HEVC decoders a distro Mesa leaves out, and libva
+finds it only through `LIBVA_DRIVERS_PATH` in `/etc/environment.d/90-limina-va.conf`
+(`guest/gpu-drivers/install.sh`). A client that does not inherit that environment, and every Flatpak
+(its runtime brings its own libva and drivers), loads the distro's VA driver and decodes H.264/HEVC
+in software; GLX/X11 clients under Xwayland stay on the distro's Mesa for GL too. Owed: a Flatpak
+`org.freedesktop.Platform.GL.limina` extension carrying our drivers
+(`docs/design/metal-transport-delivery.md` §Flatpak), and a check of which desktop launch paths
+(systemd user units, D-Bus activation, `sudo`, ssh) miss environment.d.
+
 ### Decode targets on the stock tier are one-page stubs; the remaining zero-copy work
 On vanilla mesa an exported VA decode surface's dmabuf is a 4096-byte stub at every resolution
 (`spikes/va-dmabuf-size`). The enhanced tier gives decode targets real guest memory ("virgl: give
 video decode targets real guest memory" and "virgl: allocate a decode target as one composite
-planar resource" on `limina-guest`) and carries no refusal to export a too-small dmabuf, so Firefox
+planar resource" on `[kosmickrisp-guest]`) and carries no refusal to export a too-small dmabuf, so Firefox
 has its hardware decoder there.
 Still owed, owned by `docs/design/blob-decode-targets.md` §Phases: glupload's direct importers refuse
 everything (`DirectDmabufExternal … cannot produce texture-target 2D`) and fall back to the copy
@@ -1371,24 +1381,24 @@ Metal-aligned, and the host writeback copy reconciles them) must land before the
 stock tier, reachable only by upstreaming.
 
 ### Guest virgl gates the composite decode-target create at the caller, not at the emitting site
-"virgl: allocate a decode target as one composite planar resource" on `limina-guest` gates the
+"virgl: allocate a decode target as one composite planar resource" on `[kosmickrisp-guest]` gates the
 composite shape on the sampler bitmask (`is_format_supported(buffer_format,
 PIPE_BIND_SAMPLER_VIEW)`) in `virgl_video_create_buffer`. The site that emits the planar create,
-`virgl_resource_create_front` (`virgl_resource.c` on `limina-guest`), checks only
+`virgl_resource_create_front` (`virgl_resource.c` on `[kosmickrisp-guest]`), checks only
 `VIRGL_RESOURCE_FLAG_VIDEO_TARGET` && `VIDEO_PLANAR_TARGET` && more than one plane. Unreachable today
 only because the video path is the one caller that sets `VIRGL_RESOURCE_FLAG_VIDEO_TARGET`. Any new
 caller, or a relaxed video gate, brings back what the gate prevents in its worst form: the kernel
 has already handed out the handle, the host's refusal is invisible, and the context goes to `Illegal resource`
 for the rest of its life, silently dropping every later submission. Fix: move (or duplicate) the
-sampler lookup into `virgl_resource_create_front` on `limina-guest`, re-export, bump the mesa RPM
-release, redeliver.
+sampler lookup into `virgl_resource_create_front` on `[kosmickrisp-guest]`, bump the pin, rebuild
+the GPU drivers, cut a payload and redeliver.
 
 ### Hardware decode: what is still synchronous
 VA-API decodes run on a thread per codec and every read of a target waits for its picture
 (`docs/design/async-video-decode.md`). What remains:
 - **A target lent to a venus context decodes synchronously.** A Vulkan read passes no host barrier,
   so a composite target whose surface was ever imported into venus keeps the old stall. Lifting it
-  needs the guest to fence END_FRAME (mesa-guest, design phase 3) and the host to trust that per
+  needs the guest to fence END_FRAME (`[kosmickrisp-guest]`, design phase 3) and the host to trust that per
   codec (phase 4). The same guest fence closes the existing race for a decode already queued when
   the lend happens.
 - **A per-plane target with only some planes backed by surfaces still uploads synchronously.** A
@@ -1423,7 +1433,7 @@ so neither faster copies nor a higher-priority decode thread would move this mea
 
 The only way out is a timeline per context: the virgl winsys asks for one ring at context init and
 submits with `RING_IDX`, after which the host can order classic context fences per context rather
-than globally. That is a mesa-guest change for the enhanced tier (stock guests keep the shared
+than globally. That is a `[kosmickrisp-guest]` change for the enhanced tier (stock guests keep the shared
 timeline, correct and slower), and it would ride the same delivery as the END_FRAME fence of the
 async-decode design's phase 3.
 
@@ -1590,8 +1600,8 @@ machines carry the window. Owed: carry one of the posted guest fixes on our kern
 wait). The stock tier waits for Fedora to ship a fixed kernel.
 
 ### Guest tools cannot be installed from the app alone
-The enhanced payload (kernel + mesa RPMs + agents + installer) is not bundled, and a second Mac has no
-RPMs and no toolchain. The qga bootstrap kit delivers limina-agent through the stock guest agent, but
+The enhanced payload (16 KiB kernel RPM, GPU vendor drivers + DKMS module, agents, installer) is not
+bundled, and a second Mac has no payload and no toolchain. The qga bootstrap kit delivers limina-agent through the stock guest agent, but
 only on an unconfined agent — F44 Enforcing keeps SSH as its delivery path. Designed, not built
 (`docs/design/distribution.md` §5): a versioned `limina-guest-tools-<ver>-<distro>.tar.zst` with a
 manifest, and `limina install-guest-tools [<vm>]`, which downloads or takes `--payload`, verifies,
@@ -1599,26 +1609,20 @@ stages into an ephemeral read-only `--share`, and runs the installer through the
 one-line `sudo` command. The installed `tools_version` goes into the VM definition and is re-checked on
 connect: a mismatch prompts, never refuses to boot.
 
-### `deliver-payload.sh` verifies only the agent binaries
-After the installer runs, `scripts/provision/deliver-payload.sh` checks that the installed
-`limina-agent` and `limina-agent-session` hash to the payload's, and fails the delivery if not. It
-does not check the kernel or the mesa it installed: the installer's kernel-default lines are
-printed for a human to read, and nothing compares `rpm -q` or `uname -r` against the payload. A
-delivery whose mesa or kernel did not take reports success. Fix: verify every component the payload
-carries, from the payload manifest the next entry calls for.
-
-### The guest Mesa pin is not what any delivered image runs
-`third_party/manifest.toml` pins `[mesa-guest]` at `0642e0178` on base `mesa-26.2.5`, and
-`patches/mesa-guest/` is exported from it. Every enhanced image and the current payload (r38) run mesa `26.2.3-6.limina`, built at `14952457e03` on `mesa-26.2.3`
-(`docs/images.md` §Component versions), which the checkout at `/Volumes/mesa-cs/mesa-guest` is still on. Neither rev
-is an ancestor of the other. So a rebuild from the pin ships a series no image has run, and
-`patches/mesa-guest/` describes no delivered build. Next: build and deliver the pin, or move the pin
-back to the delivered rev until that happens.
+### `deliver-payload.sh` does not verify the kernel
+After the installer runs, `scripts/provision/deliver-payload.sh` checks the agents (sha256 against the
+payload's), the GPU drivers (`/opt/limina/<wire>/MESA_REV` against the payload's), that no limina
+mesa RPM or driver-selection environment file is left, and that the 16k kernel's virtio-gpu resolves
+to DKMS's module. It does not check the kernel itself: the installer's kernel-default lines are
+printed for a human to read, and nothing compares `rpm -q limina-kernel-16k` against the payload's
+RPM. A delivery whose kernel did not take reports success. Fix: compare it from the payload's
+`manifest.txt` (`scripts/package-enhanced.sh`).
 
 ### The installer does not check the payload against the guest release
-`scripts/provision/install-enhanced.sh` checks that the mesa RPMs share one NEVRA but never that the
-payload was built for the booted guest's Fedora release; a payload built for another release installs
-and can break the desktop silently. Add a payload manifest (target `/etc/os-release`
+`scripts/provision/install-enhanced.sh` never checks that the payload was built for the booted
+guest's Fedora release. The GPU drivers are distro-agnostic, but the kernel RPM is not: a payload built
+for another release installs a kernel with another release's config and can break boot or the
+desktop silently. Add a payload manifest (target `/etc/os-release`
 `ID`/`VERSION_ID`, component versions, per-file sha256) and refuse on mismatch — the same manifest
 `docs/design/distribution.md` §5 calls for.
 
@@ -1694,7 +1698,7 @@ failure says which side moved. Open: the trigger, and whether the KK plane-index
 
 ### Nothing exercises the host half of venus ghost containment
 `vkr_ghost_containment.rs` asserts that a refused import leaves the context alive. On an enhanced
-image, "venus: allocate dma-buf import memory synchronously" on `limina-guest` makes the refusal
+image, "venus: allocate dma-buf import memory synchronously" on `[kosmickrisp-guest]` makes the refusal
 synchronous, so no ghost is created, virglrs's ghost path (`Lookup::Ghost` →
 `Dispatched::Ghosted`) never runs, and the test passes on the guest fix alone. The host half
 covers stock and older guests. Proving it needs an env-gated, off-by-default fault-injection hook in virglrs that fails the Nth create of a named command

@@ -184,9 +184,10 @@ shippable and fixes the order:
 
 1. **virglrenderer first** — a host that can back blob decode targets, advertising the bit.
    Nothing asks for it yet, so no behaviour changes.
-2. **Guest mesa second** — the enhanced tier lights up, via the usual chain: fork commit →
-   `scripts/export-mesa-guest-patches.sh` → mesa RPM → `scripts/provision/deliver-payload.sh` →
-   `docs/images.md`.
+2. **Guest mesa second** — the enhanced tier lights up, via the usual chain: a commit on the
+   `[kosmickrisp-guest]` branch and a pin bump → `scripts/build-gpu-drivers.sh` →
+   `scripts/package-gpu-drivers.sh` → `scripts/package-enhanced.sh rNN` →
+   `scripts/provision/deliver-payload.sh` → `docs/images.md`.
 
 Two capset bits, not one, because a host can do the guest-memory writeback without accepting the
 composite shape — which is exactly what shipped first. `VIDEO_GUEST_PLANES` buys real guest
@@ -211,9 +212,10 @@ texture**: with copy-transfer in both directions `virgl_resource_create_front` g
 non-shared texture the same `alloc_size = 1`, so `eglExportDMABUFImageMESA` failed for
 essentially every GL texture. GTK4's `gdk_texture_download` then consumed an uninitialized fd,
 and setting a user avatar in GNOME Settings wrote noise — RMSE 0.774 against the source, 0 on
-vanilla 26.1.8 with only libgallium swapped. Dropped in guest mesa `26.1.8-10.limina`
-(`patches/mesa-guest/0018`), alongside an EGL layer that now returns `EGL_FALSE` when a driver
-cannot export an fd instead of leaving the caller's fd array untouched (`0019`).
+vanilla 26.1.8 with only libgallium swapped. The guest series does not carry it; it carries
+instead an EGL fix that returns `EGL_FALSE` when a driver cannot export an fd rather than leaving
+the caller's fd array untouched (`docs/upstreaming/ledger/kosmickrisp-guest.md`, "egl/dri2: fail
+eglExportDMABUFImageMESA when the driver cannot export an fd").
 
 What makes dropping it safe is this design. A decode target has real guest memory on every host
 that offers a decoder, so the case the guard existed for cannot arise; `whandle->size` is still
@@ -333,8 +335,8 @@ as one object with two layers (`va/surface.c:1453`), gated on `screen->resource_
 which virgl installs. The guest work was therefore to route `virgl_video_create_buffer` through that
 constructor instead of `vl_video_buffer_create`, give virgl's `resource_create` the plane
 chaining a planar format implies, and answer `PIPE_RESOURCE_PARAM_STRIDE` and `_OFFSET` in
-`virgl_resource_get_param`, which had handled only `MODIFIER`. All three shipped in guest mesa
-`26.1.8-7.limina` (`patches/mesa-guest/0014`), with `get_param` walking the chain by the plane
+`virgl_resource_get_param`, which had handled only `MODIFIER`. All three are in the guest series
+(`docs/upstreaming/ledger/kosmickrisp-guest.md` row 0014 and the per-plane query rows after it), with `get_param` walking the chain by the plane
 argument the way every driver that builds one does, because that is how gst-va asks.
 
 That also settles how the host tells a decode target apart from anything else, with no new

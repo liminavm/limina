@@ -138,8 +138,10 @@ ours — so the module stays. **Check who ships each link before declaring an ex
   a big-endian fix — which changes how the submission should be pitched. Run `git log` before
   repeating a SHA, and never abbreviate one from memory.
 - **Stale artifacts in an output directory outrank your new one.** `build-kernel-rpm.sh` copies
-  everything out of `rpmbuild/RPMS/`, and `install-enhanced.sh` picks with `head -1` — which sorts
-  to the *older* version. Verify the artifact you think you built is the one being consumed.
+  everything out of `rpmbuild/RPMS/`, and a consumer that picks one with `head -1` gets the
+  *older* version — which is why `package-enhanced.sh` and `install-enhanced.sh` refuse a
+  directory holding more than one kernel. Verify the artifact you think you built is the one
+  being consumed.
 
 ## Agents never post
 

@@ -71,7 +71,7 @@ echo "==> base config: $CONFIG_BASE"
 # third_party/manifest.toml. There is no patch-apply stage any more — our kernel changes ARE
 # the commits on that branch, so what gets built is exactly what the pin names.
 # Committed values only (`pin`): a local override names a HOST path, so it is resolved by whoever
-# can see one — scripts/build-enhanced-rpms.sh passes FORK_URL/KREV in for it.
+# can see one — scripts/build-enhanced-kernel.sh passes FORK_URL/KREV in for it.
 # shellcheck source=scripts/lib/manifest.sh
 LIMINA_ROOT="$REPO" . "$REPO/scripts/lib/manifest.sh"
 FORK_URL="${FORK_URL:-$(pin linux repo)}"
@@ -245,8 +245,8 @@ for r in "$RPM" "$DEVEL_RPM"; do
   [ -f "$r" ] || { echo "expected RPM not found: $r" >&2; exit 1; }
 done
 # ...and CLEAN $OUT first, or the same head -1 bug returns by the other door: copying only this
-# run's RPM still leaves every PREVIOUS run's kernel sitting in $OUT, and build-all.sh globs the
-# whole directory into the payload. $OUT is this run's output, not an archive of past ones.
+# run's RPM still leaves every PREVIOUS run's kernel sitting in $OUT, and package-enhanced.sh
+# refuses a directory holding more than one. $OUT is this run's output, not an archive of past ones.
 rm -f "$OUT"/*.rpm
 cp -f "$RPM" "$DEVEL_RPM" "$OUT"/
 ls -la "$OUT"/*.rpm 2>/dev/null || { echo "(no kernel RPM produced)"; exit 1; }

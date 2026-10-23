@@ -58,7 +58,7 @@ so when you need a knob a command doesn't expose, reach for the script it wraps.
   this is required to build at all, not only to run venus — see step 1.5.
 - Apple **`container`** (`brew install container`, then
   `container system start --enable-kernel-install`) — for every Linux build: the firmware, the
-  test kernels, and the enhanced-tier guest RPMs. The boot suite's default firmware is one of
+  test kernels, the enhanced-tier kernel RPM and the guest GPU drivers. The boot suite's default firmware is one of
   its outputs, so the suite needs this. See step 6.
 - A guest disk image (`*.raw`, gitignored). Inventory + how they're built:
   `docs/images.md`.
@@ -76,8 +76,8 @@ no patch series to apply — lets virglrs vendor its own dependencies (the C vir
 it generates tables from, and the venus-protocol), and creates `third_party/venv-mesa`.
 Idempotent; safe to re-run, and the way to repair a `third_party/` tree you deleted.
 
-> The native deps (the host **KK/zink Mesa**, the guest **16 KiB kernel / Mesa / agent** RPMs)
-> are heavier, container/`meson`-driven builds that stay as their own scripts, and the
+> The native deps (the host **KK/zink Mesa**, the guest **16 KiB kernel** RPM, the guest **GPU
+> drivers**) are heavier, container/`meson`-driven builds that stay as their own scripts, and the
 > firmware is `cargo xtask firmware` — `vendor` only materializes source trees. See
 > `docs/codebases.md` for which script builds what.
 
@@ -296,21 +296,24 @@ gate nothing. `--detach` changes how a run is started, not what can be done to i
 
 Everything that has to be built *on Linux* runs in one container image —
 `limina-build:fc<FEDORA_REL>`, Fedora 44 by default (`scripts/build-image.sh`, built on first
-use). There is no second image and no second toolchain:
+use) — except the guest GPU drivers, which build on the oldest glibc we support
+(`guest/gpu-drivers/Containerfile`) so one build serves every distro:
 
 ```sh
 cargo xtask firmware               # target/firmware/efi.fd — the suite's default firmware
-cargo xtask enhanced               # 16k kernel + venus mesa RPMs + agents + install-ready payload
-cargo xtask enhanced kernel        # just one component
+cargo xtask enhanced               # the 16k kernel RPM + -devel -> target/enhanced-rpms/kernel
+scripts/build-gpu-drivers.sh       # the vendor drivers, from the [kosmickrisp-guest] checkout
+scripts/package-gpu-drivers.sh     # + the DKMS virtio-gpu module -> target/gpu-drivers/
+NOTE="..." scripts/package-enhanced.sh rNN   # payload/limina-guest-tools-f44-rNN.tar.zst
 ```
 
-`enhanced` (= `scripts/build-enhanced-rpms.sh`) runs `scripts/provision/f44/*.sh` — **the same
-scripts a booted guest runs**, not a second implementation. Those need an F44 aarch64 system,
-which is what the image is; that they once had to run inside a guest was a fact about the image
-being pinned to Fedora 43, not about containers. Run them in a guest instead when you want the
-dogfood signal of a guest building its own components — `scripts/provision/f44/README.md` has
-that path. Moving the whole toolchain to a new Fedora is `FEDORA_REL=45 FORCE=1
-scripts/build-image.sh`.
+`enhanced` (= `scripts/build-enhanced-kernel.sh`) runs `scripts/provision/f44/build-kernel-rpm.sh`
+— **the same script a booted guest runs**, not a second implementation. It needs an F44 aarch64
+system, which is what the image is; run it in a guest instead when you want the dogfood signal of
+a guest building its own kernel (`scripts/provision/f44/README.md`). `package-enhanced.sh`
+assembles the payload on the host from the kernel, the GPU drivers and the musl agents;
+`scripts/provision/deliver-payload.sh` installs it into images (`docs/images.md`). Moving the
+whole toolchain to a new Fedora is `FEDORA_REL=45 FORCE=1 scripts/build-image.sh`.
 
 ## 5. Validate
 

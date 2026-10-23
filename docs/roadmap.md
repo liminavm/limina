@@ -261,8 +261,9 @@ same device through vrend → zink-on-KosmicKrisp. **`docs/graphics.md` is the a
   (`FENCE_PRESENT=1 COPY=0` on the enhanced tier; the stock kernel keeps the copy).
 - **The virgl (vrend) tier is shipped and on by default** — its copy model is immune to the page-size
   problem, so a stock 4k guest gets accelerated GL.
-- **The enhanced tier ships as RPMs** (M5 §Productization); the app bundle carries the host GL/Vulkan
-  closure (`scripts/build-app.sh`). Software-2D + in-guest llvmpipe stays a shipping path, chosen by
+- **The enhanced tier ships as a payload** (M5 §Productization): the 16 KiB kernel RPM plus
+  limina's GPU vendor drivers under `/opt/limina`, beside the distro's Mesa; the app bundle carries
+  the host GL/Vulkan closure (`scripts/build-app.sh`). Software-2D + in-guest llvmpipe stays a shipping path, chosen by
   guest capability, not host-driver absence.
 
 **Owed:** guest-tools distribution from the app (M5); the upstream queue
@@ -281,7 +282,7 @@ never implements it. It needs four pieces:
   posted to dri-devel 2026-09-24) with no maintainer ack, and its UAPI flags have changed between
   versions. Carry its shape on the `limina` kernel branch behind our own probe, and rebase when it
   lands.
-- **Guest mesa (`limina-guest`, `src/virtio/vulkan`): the extension itself, translated rather than
+- **Guest mesa (`[kosmickrisp-guest]`, `src/virtio/vulkan`): the extension itself, translated rather than
   forwarded.** Advertise it, answer `vkGetMemoryHostPointerPropertiesEXT` locally with the
   host-visible types, and turn an import into "create a userptr blob, then import it as a resource"
   (`VkImportMemoryResourceInfoMESA`, which the protocol already has). Report a 16 KiB
@@ -321,15 +322,17 @@ Tests: limina-proto L0; `l1_agent`, `l1_shutdown`, `l1_real_agent`, `l1_multi_ag
 `l1_clipboard`, `l1_clipboard_multi_session`, `l1_session_helper`, `l1_share`, `l1_liveness`,
 `l2_share_71`, `l2_clipboard_vdagent`.
 
-### Productization: RPMs replacing stock at `/usr`
+### Productization: a kernel RPM and vendor drivers beside the distro's
 
-- **Userspace = rebuilt Fedora SRPMs replacing stock**, dnf-versionlocked. Not a sysext: our mesa vs
-  stock differ in the libgallium SONAME and an overlayfs upper cannot remove stock files — the blend
-  broke EGL. Rationale: `docs/graphics.md` §5.1, `docs/images.md`.
+- **Userspace keeps the distro's Mesa.** limina's GPU drivers install beside it under
+  `/opt/limina/<wire>/` and drive every virtio-gpu through the system loaders' own directories
+  (glvnd, Vulkan ICD + an implicit layer, libgbm, `LIBVA_DRIVERS_PATH`), with a private
+  `libgallium`, so nothing of the distro's is replaced, locked or shadowed. Rationale:
+  `docs/graphics.md` §5.1, `docs/design/metal-transport-delivery.md` §1.
 - **The kernel goes through the distro's own EFI machinery:** a kernel RPM whose `%post` runs
   `kernel-install add` (dracut + BLS entry); the stock kernel stays one GRUB choice away.
 - **Bootstrap is a one-time "install guest tools"** (`install-enhanced.sh` + the guest-tools
-  tarball) run in the *stock* guest, which already has a software-GL desktop — the two-tier bootstrap
+  tarball from `scripts/package-enhanced.sh`) run in the *stock* guest, which already has a software-GL desktop — the two-tier bootstrap
   floor. Versions: `docs/images.md` §Component versions.
 
 **Owed:**
@@ -940,7 +943,7 @@ the **freedesktop-sdk** base, **systemd-sysupdate** A/B image updates (not OSTre
 — built solely for Apple Silicon guests (aarch64, 16 KiB-page-clean userspace, venus-first), with
 **Plymouth and GDM replaced by one Wayland system compositor** that owns the display from early
 boot to shutdown. LiminaOS becomes the first-class enhanced guest and eventually replaces the
-RPMs-over-Fedora enhanced delivery; the **two-tier guarantee is untouched** — stock Fedora keeps
+Fedora enhanced delivery; the **two-tier guarantee is untouched** — stock Fedora keeps
 booting, this is the top tier, never the entry fee.
 
 ### The system compositor (the heart of it)
@@ -1264,8 +1267,8 @@ Two different problems, deliberately different answers:
 ### Sequencing — compositor first, distro second
 
 The system compositor is independently valuable and **derisks the distro decision rather than
-depending on it**: it can ship on the *Fedora* enhanced tier first (RPMs replacing Plymouth+GDM
-through the existing enhanced delivery), where it's also the differentiated payoff — seamless
+depending on it**: it can ship on the *Fedora* enhanced tier first (packages replacing Plymouth+GDM
+through the existing enhanced payload), where it's also the differentiated payoff — seamless
 boot-to-desktop is exactly the Parallels-polish gap. The distro is the bigger commitment and its
 real cost is not the initial build but the cadence forever after (security updates, toolchain
 bumps, kernel tracking) — freedesktop-sdk as the base layer is what makes that survivable for a
@@ -1322,16 +1325,17 @@ passes the buffer verbatim), so only the parameter sets are synthesized.
 no host capability can conjure a codec the guest mesa was not built with. Fedora builds the default
 `all_free` (`av1dec, av1enc, vp9dec, mpeg12dec, jpegdec`), so stock guests get H.264/HEVC only from
 RPM Fusion's `mesa-va-drivers-freeworld` (libva probes `/usr/lib64/dri-freeworld/` first). **Our
-enhanced mesa enables `h264dec,h265dec`** (`scripts/provision/f44/build-mesa-rpm.sh`) — an
-obligation, not an option: otherwise installing our components would take away a capability a stock
-guest with RPM Fusion has. `fedora-cisco-openh264` is a software codec with no VA driver and does
+vendor drivers enable `h264dec,h265dec`** (`scripts/build-gpu-drivers.sh`) and put their VA driver
+ahead of freeworld's on `LIBVA_DRIVERS_PATH` — an obligation, not an option: otherwise installing
+our components would take away a capability a stock guest with RPM Fusion has. GLX/X11 clients
+under Xwayland and Flatpaks stay on the distro's Mesa. `fedora-cisco-openh264` is a software codec with no VA driver and does
 nothing for offload.
 
 **Owed, in order:**
 1. **MJPEG decode** — `jpegdec` is already in stock mesa, so this is stock-tier by construction and
    host-side only; each picture is an independent JPEG with no references.
 2. **Asynchronous decode for targets lent to venus** (`docs/design/async-video-decode.md` phases 3
-   and 4): mesa-guest fences END_FRAME and flags the codec, then virglrs decodes lent targets
+   and 4): the guest Mesa fences END_FRAME and flags the codec, then virglrs decodes lent targets
    asynchronously when the flag is set, so a guest Vulkan consumer of decoded video stops stalling
    the control queue.
 3. **Encode** — plumbed everywhere except our backend (the protocol carries

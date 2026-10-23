@@ -16,7 +16,7 @@
 //! Two independent fixes have to hold, and this test drives both through the
 //! shipped binaries:
 //!
-//!   * guest (mesa `limina-guest`): the import allocation is synchronous, so a
+//!   * guest (mesa `[kosmickrisp-guest]`): the import allocation is synchronous, so a
 //!     refusal surfaces as `VK_ERROR_INVALID_EXTERNAL_HANDLE` at the
 //!     `vkAllocateMemory` that can still handle it, and no ghost is minted.
 //!   * host (virglrenderer `limina`): a failed create/import is TOMBSTONED, so a
@@ -122,7 +122,7 @@ fn refused_venus_import_leaves_the_context_alive() {
     );
 
     // The invariant. CONTEXT DEAD means the ring was poisoned by the refusal:
-    // either the guest minted a ghost (mesa limina-guest 0007 regressed) or vkr
+    // either the guest minted a ghost (kosmickrisp-guest ledger row 0006 regressed) or vkr
     // failed to tombstone it (virglrenderer ghost containment regressed).
     assert!(
         out.contains("CONTEXT ALIVE"),

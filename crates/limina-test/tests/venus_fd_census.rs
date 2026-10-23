@@ -20,7 +20,7 @@
 //! baseline + 2·N (both contexts' attaches leak); post-0032 it is flat.
 //!
 //! Boots the seated ENHANCED golden (`seated_efi_fedora_from_env`): dma_buf external
-//! memory needs our mesa's venus — STOCK mesa's venus advertises neither
+//! memory needs limina's venus (the vendor GPU drivers') — STOCK mesa's venus advertises neither
 //! `VK_KHR_external_memory_fd` nor dma_buf against this host, so the cycler can't run
 //! on the stock image (verified empirically). The idle gnome-shell session
 //! holds its own carriers; both censuses are settle-polled so its startup churn can't

@@ -94,30 +94,12 @@ guarantee's actual floor, and it is guarded:
 the capture oracle (`--display-capture`), the EFI image-prep script, and ISO/GRUB boot work all run
 on, since none of them can assume a working host GL.
 
-**But an *enhanced* guest does not come up on it, and that is our doing, not software-2D's.** The
-enhanced image's `/etc/environment.d/90-limina-zink.conf` pins
-`MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu` + `GALLIUM_DRIVER=virgl`, so mesa is forced onto a driver
-that requires the 3D device. With no 3D device, gbm has no driver behind `/dev/dri/card0` (which
-still exists, and `drm_info` still reports a full mode list), and mutter dies in a loop:
-
-```
-libEGL warning: egl: failed to create dri2 screen
-Failed to open gpu '/dev/dri/card0': … Failed to create gbm device: No such file or directory
-Failed to setup: No GPUs found
-org.gnome.Shell@gdm.service: Failed with result 'protocol'
-Gdm: GdmLocalDisplayFactory: maximum number of display failures reached. Giving up.
-```
-
-Measured 2026-08-16 with a clean differential: on the same image and the same device, moving that
-one file aside and restarting gdm brings a greeter up on `seat0` immediately. So the cause is the
-unconditional driver pin, not the device.
-
-**That combination is an unsupported configuration — wontfix (user's call, 2026-08-16).** The
-enhanced tier exists to use the 3D device; running it against a device that has none is not a
-scenario limina serves. The floor that must work on a GL-less host is the **stock** tier, and it
-does. Do not "fix" the override to make this case boot — the diagnosis is recorded here only so the
-next person who sees `Failed to setup: No GPUs found` on an enhanced guest recognises it in seconds
-instead of chasing gbm.
+**Whether an enhanced guest comes up on it is unmeasured with the vendor drivers, and it is not a
+supported configuration (user's call).** The enhanced tier exists to use the 3D device; the floor
+that must work on a GL-less host is the **stock** tier, and it does. If an enhanced guest fails
+here with mutter's `Failed to setup: No GPUs found`, suspect a vendor driver claiming a device it
+cannot serve: `guest/gpu-drivers/install.sh --uninstall` returns the guest to the distro's drivers
+and is the differential.
 
 Software-2D is never the right answer to "venus is misbehaving", and it is not removable — the
 compatibility floor is tested through it.
@@ -185,7 +167,8 @@ every guest GL application, not only the ones that would have crashed.
 
 ### 3.3 venus — Vulkan, and the one thing that needs the enhanced guest
 
-venus is the Vulkan side only. In an enhanced guest:
+venus is the Vulkan side only. In an enhanced guest without the Metal transport, our venus is the
+device (its driverInfo carries `(limina)`; the distro's venus is hidden behind it):
 
 ```
 $ vulkaninfo --summary
@@ -238,17 +221,17 @@ vkCreateInstance failed with ERROR_OUT_OF_HOST_MEMORY
 Isolating the ICDs proves the loader is the amplifier: `VK_DRIVER_FILES=…/lvp_icd…` alone
 enumerates llvmpipe perfectly; `…/virtio_icd…` alone produces the OOM.
 
-The fix exists — `patches/mesa-guest/0003-venus-degrade-to-the-stub-instance-when-ring-setup-f.patch`
-does exactly this — but it is in **our guest series**, which by definition a stock guest does not
-have. Closing it means getting that patch upstream so every future distro mesa carries it; it is
-item 1 of the shopping list in `docs/design/16k-page-requirement.md` and it is tracked in
-`docs/upstreaming/ledger/mesa.md`.
+The fix exists — "venus: degrade to the stub instance when ring setup fails post-connect", row 0003
+of `docs/upstreaming/ledger/kosmickrisp-guest.md` — but it is in **our vendor drivers**, which by
+definition a stock guest does not have. Closing it means getting that patch upstream so every
+future distro mesa carries it; it is item 1 of the shopping list in
+`docs/design/16k-page-requirement.md`.
 
 ### 3.4 Detecting tiers: additively, never as one switch
 
 A guest may have some, all, or none of the enhanced pieces, and partial states are normal (a guest
 mid-upgrade, or one that installed only part). Light up each feature when *its own* prerequisite is
-present — the limina mesa for the venus WSI fixes, the agent for its own features — rather than
+present — the vendor drivers for our venus and virgl fixes, the agent for its own features — rather than
 gating everything on a monolithic "enhanced" flag.
 
 ## 4. Scanout and present: IOSurface is the macOS dmabuf
@@ -507,7 +490,10 @@ Two independent gates, and only their intersection is reachable:
 - **Guest.** Fedora builds mesa with the default `-Dvideo-codecs=all_free`, enforced in the VA
   *frontend* (`src/gallium/auxiliary/vl/vl_codec.c`) and therefore driver-independent: AV1,
   VP9, MPEG-2, JPEG. H.264 and HEVC are absent whatever the host offers. RPM Fusion's
-  `mesa-va-drivers-freeworld`, or our own mesa RPM built `-Dvideo-codecs=all`, restores them.
+  `mesa-va-drivers-freeworld` restores them; so does limina's vendor VA driver
+  (`scripts/build-gpu-drivers.sh` enables `h264dec,h265dec`), which libva loads ahead of the
+  distro's through `LIBVA_DRIVERS_PATH` — for VA clients only: GLX/X11 clients under Xwayland and
+  Flatpaks stay on the distro's Mesa.
 - **Host.** VideoToolbox on Apple silicon has no MPEG-2 path at all, and AV1 *hardware*
   decode needs an M3 or later. Measured matrix: `spikes/videotoolbox-caps/RESULTS.md`.
 - **Host, software.** dav1d, linked into the worker: a host with no AV1 silicon decodes AV1
@@ -517,8 +503,8 @@ Two independent gates, and only their intersection is reachable:
 
 So VP9 (and MJPEG) everywhere, and AV1 everywhere too: on VideoToolbox from M3 on, on the
 host's dav1d below that. **Implemented today: VP9 profile 0, AV1 main, H.264 (Baseline/Main/High) and
-HEVC Main** — the last two enhanced-tier or freeworld only, since the guest's `all_free`
-gate keeps them out of a stock driver whatever the host offers
+HEVC Main** — the last two through the vendor VA driver or freeworld only, since the guest's
+`all_free` gate keeps them out of a stock driver whatever the host offers
 (`docs/design/h264-hevc-decode.md`).
 
 ### Traps this path is shaped around
@@ -640,34 +626,32 @@ Default cap: `max(8 GiB, 2 × guest RAM)`; at 8 GiB of guest RAM the worker logs
 
 ## 5.1 Delivery: how the enhanced graphics stack reaches a guest
 
-The enhanced tier is delivered as **rebuilt Fedora RPMs replacing stock at `/usr`**, versionlocked
-— not as a sysext overlay. The reason is specific to mesa: our mesa has a different `libgallium`
-soname than the stock one, and an overlay can only *shadow* a file, never remove it, so the guest
-ends up with a blended ABI that breaks mutter's KMS EGL. An RPM replaces the old soname outright.
-(The retired sysext builders are in `scripts/archive/`.)
+The guest keeps its **distro's Mesa**. limina's GPU drivers are a vendor build of the
+`[kosmickrisp-guest]` Mesa (`scripts/build-gpu-drivers.sh`, `-Dlimina-vendor=true`), built once
+for every distro and installed under `/opt/limina/<wire>/` by `guest/gpu-drivers/install.sh`, which
+links them where the system's loaders look: glvnd's EGL vendor directory, the Vulkan loader's ICD
+directory (`/etc/vulkan/icd.d/limina-venus.json`) and implicit-layer directory, and libgbm's backend
+directory. Nothing of the distro's is replaced, locked or shadowed. Design:
+`docs/design/metal-transport-delivery.md`.
 
-Alongside the RPMs, `install-enhanced.sh` writes the driver selection into
-`/etc/environment.d/90-limina-zink.conf` (the filename predates the GL flip and was kept):
+They drive **every** virtio-gpu, in place of the distro's Mesa:
 
-```sh
-GALLIUM_DRIVER=virgl
-MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu
-VK_DRIVER_FILES=<venus ICD>
-VN_DEBUG=mem_budget          # venus only advertises VK_EXT_memory_budget under this gate
-```
+- **GL**: zink on KosmicKrisp over a limina (Metal) transport, our virgl elsewhere.
+- **Vulkan**: KosmicKrisp on the transport, our venus otherwise. The implicit layer hides the
+  distro's venus behind ours (which marks its driverInfo `(limina)`), and every venus behind
+  KosmicKrisp.
+- **VA-API**: our virgl VA driver, with the H.264/HEVC decoders a distro Mesa leaves out (§4.5).
+  libva has no vendor directory, so `LIBVA_DRIVERS_PATH` in `/etc/environment.d/90-limina-va.conf`
+  puts ours ahead of the distro's.
 
-then sets GRUB's default to the 16 KiB kernel and reboots. `MESA_LOADER_DRIVER_OVERRIDE=zink` /
-`GALLIUM_DRIVER=zink` — zink as the *guest's* GL driver — is no longer a supported configuration.
+Only the newest wire's tree drives virgl, venus and video; an older tree beside it serves just its
+own transport's Vulkan. GLX/X11 clients under Xwayland and Flatpaks keep the distro's drivers.
+venus advertises `VK_EXT_memory_budget` by default — the one backpressure channel the venus
+transport does not throw away (§5) — where upstream gates it behind `VN_DEBUG=mem_budget`.
 
-**Two naming hazards in that file, flagged by the synoik guest session (2026-08-16) after one of
-them cost them a false claim in their own code.** `VN_DEBUG=mem_budget` reads like a debug flag any
-tidy-up would drop, but it is the gate on the *only* backpressure channel the venus transport does
-not throw away (§5) — without it `VK_EXT_memory_budget` simply is not advertised, and a guest that
-tests for the extension concludes venus lacks it. They measured the difference directly:
-`vulkaninfo` lists 1102 lines with `VN_DEBUG` unset and 1105 with it set, the extension appearing
-only in the second. And the whole file is named `90-limina-zink.conf` while zink-as-guest-GL has
-not been a supported configuration since 2026-08-04. Neither is load-bearing to rename, but both
-invite exactly the mistake that was made.
+No environment file selects a driver: a client sees ours because the loaders find them first, and
+a `VK_DRIVER_FILES` that leaves ours out gets the distro's. The installer, the DKMS virtio-gpu
+module it builds, and the rest of the payload are in `docs/images.md` §Delivery.
 
 An enhanced image is safe to boot even if the 16 KiB kernel is not the selected one: under the
 default 4 KiB granule venus comes up on the 4 KiB kernel too, and under `--ipa-granule 16k` it
@@ -810,23 +794,24 @@ Fringe modes, for when they are the explicit subject and not otherwise: `--kerne
 
 ### Confirm which tier is actually live
 
-Inside the seated session — the renderer string is what settles it:
+The renderer string is what settles it:
 
 ```sh
-systemd-run --user --wait --pipe --collect --setenv=WAYLAND_DISPLAY=wayland-0 \
-    glxinfo -B                     # → "virgl (zink Vulkan 1.4(… MESA_KOSMICKRISP))"
-vulkaninfo --summary               # → "Virtio-GPU Venus (Apple M1 Max)", driverName = venus
+eglinfo -B                         # → virgl, or zink on KosmicKrisp with the Metal transport
+vulkaninfo --summary               # → "Virtio-GPU Venus (Apple M1 Max)", driverInfo "… (limina)";
+                                   #   KosmicKrisp first with the Metal transport
+vainfo                             # → the driver under /opt/limina/<wire>/, H.264/HEVC listed
 ```
 
-On the current F44 enhanced image a plain non-login `ssh … vulkaninfo` **does** enumerate venus,
-and `/etc/environment.d/90-limina-zink.conf`'s variables **are** present in that shell (the user
-manager holds them). Older notes said the opposite as an unconditional rule; it is not one. It was
-only verified with a seated session up, though, so the durable rule is:
+Use `eglinfo`, not `glxinfo`: GLX clients run under Xwayland on the distro's Mesa, so `glxinfo`
+reports the distro's driver whatever the session uses. Vulkan needs no session environment — the
+loader reads `/etc/vulkan/icd.d/limina-venus.json` from any shell, ssh included — and a venus
+without `(limina)` in its driverInfo is the distro's (a stock guest, or the vendor drivers
+missing). `vainfo` is the one environment-dependent check: libva finds our driver through
+`LIBVA_DRIVERS_PATH` from `/etc/environment.d/90-limina-va.conf`, so print that variable in the
+shell you are using before reading an empty or distro `vainfo` as a broken driver.
 
-> Print the variable in the shell you are actually using. Treat an *empty* result as "check the
-> environment", not as "venus is broken".
-
-Host-side, active `Mesa:` GL errors in the worker log mean venus is rendering.
+Host-side, active `Mesa:` GL errors in the worker log mean the guest is rendering.
 
 ### Read the pixels
 
@@ -1052,7 +1037,7 @@ or commit while it runs.
 | **Multisampling is disabled on the GL tier** — a `{antialias:true}` WebGL context takes a GPU address fault and loses the host Vulkan device; mitigated by advertising `max_samples = 1`, root cause open | §3.2, `spikes/webgl-msaa/RESULTS.md` |
 | **A vrend desktop is never held off its scanout, so every frame is copied** — the guest kernel fences no non-blob primary flush; a Metal blit keeps it correct at ~1.2 ms per frame, and fencing those flushes in the enhanced kernel would restore zero-copy there | §4, `docs/hardening-backlog.md` |
 | **Every venus frame waits a ~215 µs host round trip for its ring fence** — the cost of ordering ring fences (the stale-frame fix): vkmark −37%, glmark2 about −10%. GPU-side ordering (retire on arrival, the present path waits on the GPU) would recover it, provided a guest reading mapped memory after the fence keeps the CPU wait | `perf/2026-10-16-venus-regression.md` |
-| **A venus failure kills the whole Vulkan loader** — upstream the stub-instance patch so a stock guest keeps llvmpipe when venus goes down | §3.3, `docs/design/16k-page-requirement.md`, `docs/upstreaming/ledger/mesa.md` |
+| **A venus failure kills the whole Vulkan loader** — upstream the stub-instance patch so a stock guest keeps llvmpipe when venus goes down | §3.3, `docs/design/16k-page-requirement.md`, `docs/upstreaming/ledger/kosmickrisp-guest.md` |
 | zink reads `heap.size − heapUsage` instead of `heapBudget`, so GL clients do not see our cap | `docs/design/gpu-memory-budget.md` §Known limits |
 | Pure-GL guests are unbounded — the cap is only enforced at `vkAllocateMemory` | same |
 | Explicit sync: only binary `SYNC_FD` external semaphores exist; timeline/`OPAQUE_FD` do not | `docs/research/venus-explicit-sync-gap.md` (and read §5–6 before chasing `OPAQUE_FD`) |
@@ -1066,5 +1051,6 @@ or commit while it runs.
 - `docs/design/venus-ring-idle-wakeups.md` — the idle-wakeup work
 - `docs/research/venus-explicit-sync-gap.md` — external semaphores and explicit sync
 - `docs/images.md` — image inventory and shipped guest component versions
+- `docs/design/metal-transport-delivery.md` — the guest GPU vendor drivers and how they install
 - `docs/perf/`, `perf/` — analysis and the measurement ledger
 - `spikes/graphics-doc-audit/RESULTS.md` — the measurements this document was written from

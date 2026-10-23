@@ -202,14 +202,14 @@ passthrough reports Metal's global state, which moves with unrelated host activi
 anti-correlated with what the client just did. After: budget 2.00 GiB flat, usage
 0 → 1.00 GiB.
 
-The guest half is **configuration, not code**: venus advertises the extension only under
-`VN_DEBUG(MEM_BUDGET)`, which is a runtime env gate (`vn_common.h:65`, read once per process
-via `os_get_option`), so `install-enhanced.sh` ships `VN_DEBUG=mem_budget` in
-`/etc/environment.d/90-limina-zink.conf` next to the driver selection. Two consequences
-worth remembering: it must be in the client's environment *before* the process starts, and
-**a non-login shell is not guaranteed to have `environment.d`'s variables** — on the current F44
-enhanced image it does inherit them from the user manager, but that is an image property, not a
-rule, so the test sets the variable explicitly rather than relying on it (`docs/graphics.md` §8).
+The guest half is one line in limina's venus: upstream venus advertises the extension only
+under `VN_DEBUG(MEM_BUDGET)`, a runtime env gate (`vn_common.h:65`, read once per process via
+`os_get_option`), and the vendor drivers' venus (`[kosmickrisp-guest]`, ledger row "venus: a
+limina vendor build advertises VK_EXT_memory_budget" in
+`docs/upstreaming/ledger/kosmickrisp-guest.md`) turns it on by default, so no environment is
+involved. A guest on the distro's venus gets the extension only with `VN_DEBUG=mem_budget` in the
+client's environment before the process starts; the test sets it explicitly, so it exercises the
+host half on either (`docs/graphics.md` §8).
 
 ## Known limits
 

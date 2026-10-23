@@ -7,9 +7,9 @@
 //! `query_dmabuf_modifiers`, so its compositor can only advertise `DRM_FORMAT_MOD_INVALID`
 //! and a Vulkan client falls onto mesa WSI's **prime-blit** path: it renders into a private
 //! image and blits into a linear staging **VkBuffer**, and it is that buffer's memory the
-//! compositor imports as the `wl_buffer`. Our enhanced guest mesa never gets here — patch
-//! `patches/mesa-guest/0001` rewrites INVALID to LINEAR so the client takes the native
-//! single-memory path straight onto an IOSurface.
+//! compositor imports as the `wl_buffer`. Our enhanced-tier venus never gets here — row 0001 of
+//! `docs/upstreaming/ledger/kosmickrisp-guest.md` rewrites INVALID to LINEAR so the client takes
+//! the native single-memory path straight onto an IOSurface.
 //!
 //! Host-side that buffer memory is not bound to any image, so it has no IOSurface, and vrend's
 //! `set_type` used to hand the compositor a zeroed placeholder texture: every Vulkan window

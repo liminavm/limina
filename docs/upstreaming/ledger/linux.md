@@ -315,7 +315,7 @@ acceptance: once a released kernel carries it, the enhanced-tier requirement dis
 new enough kernel" and the stock tier absorbs it. Nothing in the fix is limina-specific.
 
 **The lesson the fix carries** is that it was one of *four* faults on a single path, each hiding
-the next — two here, two in guest Mesa (`docs/upstreaming/ledger/mesa.md`), plus the host half in
+the next — two here, two in guest Mesa (`docs/upstreaming/ledger/kosmickrisp-guest.md`), plus the host half in
 vrend. Fixing any one alone changes the symptom and not the outcome, which is exactly how a
 partial fix reads as a wrong theory. Measure the *next* hop after every fix, not the pixels.
 

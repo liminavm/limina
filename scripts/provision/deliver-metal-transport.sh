@@ -11,7 +11,7 @@
 #   scripts/provision/deliver-metal-transport.sh Fedora-Workstation-44.metal.test.raw ...
 #
 # Nothing selects the drivers but the device: booted with the transport the guest's compositor
-# and clients run on it, booted without it the same guest is stock.
+# and clients run on KosmicKrisp over it, booted without it on the same drivers' virgl and venus.
 #
 # Per image, in place: refuse if a live limina-vmm has it open; CoW backup
 # `<image>.bak-pre-metal.raw` (LIMINA_DELIVER_BACKUP=0 skips it); boot through the default vehicle

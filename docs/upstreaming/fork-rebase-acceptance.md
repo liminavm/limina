@@ -27,8 +27,6 @@ tip, conflicts and how they were resolved, and items it marks **NEEDS HUMAN**.
 
 The Mesa PRs are stacked. `limina-kk` goes onto upstream main.
 `metal-native-context` is restacked on the rebased kk, so its PR's base is the kk rebase branch.
-`limina-guest` moves only within its point-release series, and moving to a new series is the
-user's call.
 
 **Check every PR's tip against the fork's live branch.** The fork keeps moving after the routine
 runs. Compare the "limina tip" the PR rebased from with `git ls-remote liminavm <branch>`. If the
@@ -99,8 +97,7 @@ Each fork is covered as follows:
 |---|---|---|
 | libkrun, imago | `cargo xtask build` (worktree clones at the candidate revs) | every test |
 | mesa `limina-kk` (host KK + zink) | `scripts/build-host-mesa.sh both` **in place**, run from the worktree. It moves the shared checkout's `limina-kk` branch to the *worktree's* manifest pin (so bump the pin first, step 3) and builds into the shared `/Volumes/mesa-cs/build-kk` and `zink-kk-prefix`, the only KK the harness loads. Keep it if the suite is clean. If the round is rejected, run the script again from a checkout at the old pin. | every venus/vrend test |
-| mesa `metal-native-context` (guest vendor drivers) | `MESA_TREE=/Volumes/mesa-accept/mesa-mnc VOLUME=<own-volume> scripts/build-gpu-drivers.sh`, then `scripts/package-gpu-drivers.sh` | the metal and enhanced tests, through image clones (below) |
-| mesa `limina-guest` (guest venus RPM) | none: bump the pin and run `scripts/export-mesa-guest-patches.sh` | **not tested.** No RPM build is part of acceptance. |
+| mesa `metal-native-context` (guest vendor drivers) | `MESA_TREE=/Volumes/mesa-accept/mesa-mnc VOLUME=<own-volume> scripts/build-gpu-drivers.sh`, then `scripts/package-gpu-drivers.sh` | every test on the image clones (below): the drivers serve the metal transport and every enhanced image's venus, virgl and VA |
 | Cardea (when the pin moved, or the suite refuses a stale firmware) | `scripts/build-firmware.sh` (`cargo xtask firmware`) | every EFI boot |
 
 Deliver the vendor drivers into **clones**, never the shared images:
@@ -158,7 +155,7 @@ Stop and report to the user:
 - each fix and why it was needed;
 - the suite verdict;
 - any flake, with both rates;
-- what is owed: measurements a fix invalidated, coverage that was skipped (the guest RPM).
+- what is owed: measurements a fix invalidated, coverage that was skipped.
 
 Push nothing until the user approves.
 
@@ -166,7 +163,7 @@ On approval, push each fork branch in this order. Push from the clone that has t
 remote with write access to `liminavm`:
 
 ```sh
-git tag pre-rebase-<date> <old-live-head>            # -mnc / -guest suffix for the other mesa branches
+git tag pre-rebase-<date> <old-live-head>            # -mnc suffix for metal-native-context
 git push liminavm pre-rebase-<date>
 git push --force-with-lease=<branch>:<old-live-head> liminavm <new-tip>:refs/heads/<branch>
 git push liminavm <new-upstream-base>:refs/heads/main       # the fork's main tracks upstream
@@ -174,7 +171,7 @@ git push liminavm <new-upstream-base>:refs/heads/main       # the fork's main tr
 
 Then the limina side:
 
-1. Commit `third_party/manifest.toml`, plus `patches/mesa-guest/` when that pin moved. The
+1. Commit `third_party/manifest.toml`. The
    message gives what each fork moved onto, each fix, and the suite verdict, including the flake
    and both of its rates.
 2. Bring the upstreaming ledger along in the same push (`docs/upstreaming/ledger/`, one file per
@@ -207,6 +204,6 @@ Remove what the round created:
 If the Cardea pin moved, rebuild with `cargo xtask firmware`, then copy the new `target/firmware/efi.fd` and its `.rev` into the
 main checkout. Otherwise main's next suite refuses to run with the stale firmware.
 
-The shared Mesa trees that other sessions build from (`/Volumes/mesa-cs/mesa-guest`,
-`/Volumes/mesa-cs/mesa-metal-guest`) are **not** moved by this procedure. Say in the report that
-they now sit behind the pins, so whoever builds from them next moves them first.
+The shared guest Mesa tree that other sessions build from (`/Volumes/mesa-cs/mesa-metal-guest`) is
+**not** moved by this procedure. Say in the report that it now sits behind the pin, so whoever
+builds from it next moves it first.

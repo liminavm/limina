@@ -35,7 +35,7 @@ why GNOME's clipboard landed on stock `spice-vdagent` (#37, 2026-08-15) rather t
 anything of ours; the agent's ext-data-control backend still lights up on KDE/wlroots
 guests. GNOME's sanctioned alternative is the portal/RemoteDesktop clipboard — already
 limina's opt-in RD rung (`limina-clipboard-rd-optin`). The patch stays as an unshipped
-experiment (`scripts/build-mutter-rpm.sh` applies whatever sits here); `need` = needed
+experiment (no build applies it); `need` = needed
 in the sense that no upstream equivalent exists to retire it, `disp` = carry.
 
 The `guest-enhanced` rubric is moot in its usual form — the patch is NOT delivered

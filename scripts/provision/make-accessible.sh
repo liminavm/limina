@@ -55,7 +55,7 @@ echo "-- L2 replay test tooling (glmark2 GL probe, apitrace GL replay, gfxrecons
 # build it in-guest once and install to /opt/gfxreconstruct (the path
 # crates/limina-test/tests/venus_replay.rs hardcodes). This bloats the base — acceptable: it's the
 # stock/enhanced *test* base (stock.test / enhanced.test snapshot from it), never a daily-driver
-# image, and the enhanced *delivery* (install-enhanced.sh: kernel+mesa+mutter+agent) does NOT ship
+# image, and the enhanced *delivery* (install-enhanced.sh: kernel, GPU drivers, agents) does NOT ship
 # these, so a migrated guest stays clean.
 command -v glmark2-es2 >/dev/null && command -v eglretrace >/dev/null \
   || sudo dnf install -y glmark2 glmark2-wayland apitrace

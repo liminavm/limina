@@ -28,8 +28,9 @@ Consequences to accept up front:
 
 - **The two-tier guarantee holds trivially, but the feature is one-sided.** A stock guest
   keeps software decode; an enhanced guest gets hardware. Nothing degrades.
-- **We already own this dial.** Our enhanced mesa is built from Fedora's SRPM, so enabling
-  `h264dec,h265dec` is a spec change in `scripts/provision/f44/build-mesa-rpm.sh`, not a patch.
+- **We already own this dial.** The enhanced tier's VA driver is our own vendor build
+  (`scripts/build-gpu-drivers.sh`, `docs/design/metal-transport-delivery.md` §1), so enabling
+  `h264dec,h265dec` is a configure option, not a patch.
 - **Stock users have their own route** — RPM Fusion's `mesa-va-drivers-freeworld`, which libva
   already probes ahead of ours (`/usr/lib64/dri-freeworld/` appears in every guest's driver
   search). A guest with freeworld installed reaches our host backend with no help from us,
@@ -43,11 +44,13 @@ contains a codec.
 
 Concretely:
 
-- **Enhanced tier**: `build-mesa-rpm.sh` injects `-Dvideo-codecs=all_free,h264dec,h265dec`
-  into the spec's `%meson` block. The value is additive by design — meson's `all_free` branch
-  does `_codecs += free_codecs`, so naming the two decoders keeps every free codec and pulls in
-  **no encoders**. Fedora passes no `-Dvideo-codecs` at all, so the injection has exactly one
-  site to find, and the script fails loudly if it misses.
+- **Enhanced tier**: `scripts/build-gpu-drivers.sh` configures the vendor drivers with
+  `-Dvideo-codecs=all_free,h264dec,h265dec`. The value is additive by design — meson's
+  `all_free` branch does `_codecs += free_codecs`, so naming the two decoders keeps every free
+  codec and pulls in **no encoders**. The driver lands in `/opt/limina/<wire>/lib/dri`, which
+  `LIBVA_DRIVERS_PATH` (`/etc/environment.d/90-limina-va.conf`) puts ahead of the system's VA
+  directories, freeworld's included. Only VA clients that read that environment get it: GLX/X11
+  clients under Xwayland and Flatpaks stay on the distro's Mesa.
 - **Stock tier**: `mesa-va-drivers-freeworld` goes onto the F44 `accessible` and `stock.test`
   images via `scripts/provision/install-freeworld-va.sh`. `vanilla.raw` is left pristine on
   purpose, so there is still one untouched Fedora reference to compare against. **This is what
@@ -60,7 +63,7 @@ Concretely:
 guest runs vanilla mesa — RPM Fusion's freeworld build included — and therefore does *not*
 carry the one-line fix that stopped virgl offering YV12/IYUV as decode targets. libva also
 probes `/usr/lib64/dri-freeworld/` **ahead of** `/usr/lib64/dri/` (measured on a live guest),
-so on a freeworld image the vanilla driver is the one that loads even where ours is present.
+so on a freeworld image the vanilla freeworld driver is the one that loads.
 
 That is a constraint on the *validation vehicle*, not on the feature:
 
@@ -240,7 +243,7 @@ Test vehicles, in the order they should be reached for:
      codec-independent, so the `26.1.7-4` NV12 fix covers H.264/HEVC the day they are enabled.
    - *Stock* — Chrome (`chrome://gpu`, plus the media-internals decoder name) or a GStreamer
      pipeline (`vah264dec` / `vah265dec` appearing in `gst-inspect-1.0 va`, then a decode run).
-     Both pick NV12 on their own, so they exercise the backend without needing our mesa.
+     Both pick NV12 on their own, so they exercise the backend without needing our drivers.
 
 A conformance suite is worth using here in a way it was not for VP9: the JCT-VC/JVT bitstreams
 exercise parameter-set corners (cropping, scaling lists, long-term references) that a

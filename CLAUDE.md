@@ -41,8 +41,7 @@ right tool — not treat upstream as immutable:
     `third_party/` source tree. **Every dep is on the fork model**: clone our fork under github.com/liminavm and check out the
     rev pinned in the committed `third_party/manifest.toml` — the fork's `limina` branch IS the
     delta, no patch series; `main`/`master` tracks upstream; tag-before-rebase keeps every
-    pinned rev reachable. The `patches/**` dirs are tombstones (exception: `patches/mesa-guest/`
-    is a committed *export* derived from the mesa-guest fork, and `patches/mesa/` is
+    pinned rev reachable. The `patches/**` dirs are tombstones (`patches/mesa/` is
     reference-only queue material). A dep marked `heavy = true` (the kernel — multi-GB, never
     built on this host) is **skipped unless `--heavy`**. Run it once after a fresh clone,
     before `cargo build` / `scripts/test-boot.sh`.
@@ -94,17 +93,20 @@ right tool — not treat upstream as immutable:
     image (Mesa won't build on a case-insensitive FS), so it is **not** vendored by
     `cargo xtask vendor` — `third_party/manifest.toml` records which rev the checkout should be on,
     and `scripts/ensure-mesa-cs.sh` only mounts the image.
-  - **`limina-guest`** — the **guest** venus Mesa: our commits on the Fedora SRPM base recorded
-    as `base` in the manifest (the base both RPM tracks build); worktree at `/Volumes/mesa-cs/mesa-guest`. Because the RPM builds run inside a build
-    guest/container with no access to that checkout, the branch is consumed as an **exported,
-    committed series**: `scripts/export-mesa-guest-patches.sh` derives `patches/mesa-guest/`
-    from the manifest pin, and `scripts/provision/f44/build-mesa-rpm.sh` applies it via the
-    spec (in the build container via `scripts/build-enhanced-rpms.sh`, or in a booted guest —
-    same script either way). Never hand-edit the exported patches —
-    commit on the fork, push, bump the manifest rev, re-export. The old `patches/mesa/` pool
-    is a tombstone (reference-only upstream-queue material).
+  - **`metal-native-context`** (`[kosmickrisp-guest]`) — the **guest** GPU drivers: the host KK
+    branch plus guest-only commits (venus, virgl, zink, EGL, video), at
+    `/Volumes/mesa-cs/mesa-metal-guest`. The guest keeps its distro's Mesa; this branch is built
+    once for every distro as limina's **vendor drivers** (`scripts/build-gpu-drivers.sh`,
+    `-Dlimina-vendor=true`), packaged with the DKMS virtio-gpu module by
+    `scripts/package-gpu-drivers.sh` and installed under `/opt/limina/<wire>/` by
+    `guest/gpu-drivers/install.sh`. They drive **every** virtio-gpu: GL is zink on KosmicKrisp over
+    a limina (Metal) transport, our virgl elsewhere; Vulkan is KosmicKrisp on the transport, our
+    venus otherwise; VA-API is our virgl driver with H.264/HEVC. GLX clients under Xwayland and
+    Flatpaks stay on the distro's Mesa. Design: `docs/design/metal-transport-delivery.md`; audit
+    status: `docs/upstreaming/ledger/kosmickrisp-guest.md`.
 
-  Always check *which branch* a mesa change targets — host `limina-kk` vs guest `limina-guest`.
+  Always check *which branch* a mesa change targets — host `limina-kk` vs guest
+  `metal-native-context`.
 - **The guest Linux kernel** — **fork model**: `github.com/liminavm/linux` (a fork of
   `gregkh/linux`, the stable-tree mirror — stable point releases don't exist in `torvalds/linux`),
   branch `limina`, pinned by `third_party/manifest.toml`. Our changes ARE the commits on that
@@ -157,7 +159,7 @@ Fedora kernel; a 16 KiB / host-page-aware-reporting custom kernel makes it optim
 Two refinements that are easy to forget:
 
 - **Detect capabilities granularly and additively, not as one tier switch.** A guest may
-  have *some*, *all*, or *none* of the enhanced pieces (16k kernel, venus mesa, limina-agent,
+  have *some*, *all*, or *none* of the enhanced pieces (16k kernel, GPU drivers, limina-agent,
   virtiofs, clipboard backend, …), and **partial states are normal** (a guest mid-upgrade,
   or one that only installed part). Take advantage of whatever is present — light up each
   feature when *its own* prerequisite is there — rather than gating everything on a monolithic
@@ -311,11 +313,12 @@ video). `docs/research/GAPS-and-verification.md` tracks claims still needing ver
   size surprises you, something got swept in. A scoped `git add -A <dir>` is acceptable only
   when you have just looked at `git status` for that directory and every entry belongs.
 - **When guest components change, refresh the deliverables AND the enhanced images.** Any
-  rebuild of a guest-side component (16k kernel, mesa, limina-agent,
-  limina-agent-session; guest mutter is stock) must flow into
-  (a) the guest-tools tarball (`scripts/provision/f44/package-payload.sh`) and (b) an
+  rebuild of a guest-side component (16k kernel, GPU drivers, limina-agent,
+  limina-agent-session; guest Mesa and mutter are stock) must flow into
+  (a) the guest-tools payload (`scripts/package-enhanced.sh <rNN>`; recipe in `docs/images.md`
+  §Delivery) and (b) an
   `install-enhanced.sh` pass over the enhanced-tier images (`enhanced.raw` /
-  `enhanced.test.raw` / `enhanced.synoik.raw`) — `scripts/provision/deliver-payload.sh
+  `enhanced.test.raw` / `enhanced.synoik.raw` / `enhanced.kde.raw`) — `scripts/provision/deliver-payload.sh
   <payload> <image>...` does that pass (backup, boot, install, verify, poweroff) — then update
   `docs/images.md` §Component versions. A stale image makes every "identical" local repro of a
   dogfood crash silently run a guest deliveries behind the deployed one.
@@ -429,14 +432,15 @@ directly observed.
   KosmicKrisp + the zink-on-KK DYLD/Mesa selectors); a *bare* `target/debug/limina --window` with
   NONE of that env **aborts on GPU init** (`Couldn't open libEGL.dylib` → SIGABRT) — that's the
   missing env, **not** a coexist problem, and **not** a reason to fall back to software-2D.
-  - **Verifying venus is live: print the env in the shell you are actually using.** `vulkaninfo` in
-    the seated desktop shows `Virtio-GPU Venus`. Over plain non-login `ssh` it *also* enumerates venus
-    on the current F44 enhanced image (measured 2026-08-16 — the user manager holds
-    `/etc/environment.d/90-limina-zink.conf`'s vars, and the venus ICD is a normal entry in
-    `/usr/share/vulkan/icd.d/` anyway), so the long-standing "an empty ssh `vulkaninfo` is expected"
-    rule is **not** unconditional. Treat an *empty* result as "echo `$VK_DRIVER_FILES` and check the
-    env", not as "venus is broken". The other host-side tell: active `Mesa:` GL errors in the worker
-    log mean venus **is** rendering. Full picture: `docs/graphics.md`.
+  - **Verifying which driver is live.** Vulkan needs no session env: the loader reads our ICD
+    (`/etc/vulkan/icd.d/limina-venus.json`) from any shell, ssh included, so `vulkaninfo --summary`
+    names the device anywhere — our venus marks its driverInfo `(limina)`, and with the Metal
+    transport KosmicKrisp is the first device; a venus *without* `(limina)` is the distro's (a stock
+    guest, or the vendor drivers missing). GL: `eglinfo -B` shows virgl, or zink on KosmicKrisp with
+    the transport. VA-API is the one env-dependent piece (`LIBVA_DRIVERS_PATH` from
+    `/etc/environment.d/90-limina-va.conf`): an empty or distro `vainfo` over ssh means "check
+    `$LIBVA_DRIVERS_PATH`", not "the driver is broken". The host-side tell: active `Mesa:` GL errors
+    in the worker log mean the guest **is** rendering. Full picture: `docs/graphics.md`.
   - **FRINGE — `--kernel` injection** (`spikes/venus-draw-probe/boot-seated-kk.sh`,
     `scripts/run-venus-window.sh`): direct-boots an *external* `Image-16k` with `selinux=0`, bypassing
     the guest's GRUB and SELinux. Use **only** when you need a deterministic test kernel (only the

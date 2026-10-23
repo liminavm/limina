@@ -1,7 +1,7 @@
 # Asynchronous hardware video decode
 
 Status: **phases 1 and 2 implemented; 3 and 4 proposed** · Scope: virglrs (the decode), libkrun
-(snapshot drain), mesa-guest (one fence) · Backlog: *Hardware decode: what is still synchronous*
+(snapshot drain), the guest Mesa `[kosmickrisp-guest]` (one fence) · Backlog: *Hardware decode: what is still synchronous*
 (`docs/hardening-backlog.md`, Video)
 
 ## The problem
@@ -56,7 +56,7 @@ Moving the decode off the thread breaks these guarantees, so the design has to r
    because the unit outlives a synchronous call.
 
 The guest does **not** rely on any of this. `virgl_video_end_frame` flushes with a NULL fence and
-never fills `picture->out_fence` (`/Volumes/mesa-cs/mesa-guest/src/gallium/drivers/virgl/virgl_video.c:1060-1072`).
+never fills `picture->out_fence` (`src/gallium/drivers/virgl/virgl_video.c:1061-1073` at the `[kosmickrisp-guest]` pin `23a28823ed4`).
 So `vaSyncSurface` finds no fence and returns at once (`src/gallium/frontends/va/surface.c`,
 `_vlVaSyncSurface`: "No outstanding operation: nothing to do"). The guest believes a picture is
 ready as soon as it has *queued* the END_FRAME.
@@ -182,7 +182,7 @@ host processes the submit" to "until the picture lands".
   own: its picture arrives by an upload the fence does not cover. None does today (surfaces are
   minted only for 32-bit colour textures, planes are R8 or RG8), and the rule keeps a future
   plane surface from making the fence a lie.
-- **Guest fix (mesa-guest, upstream candidate):** `virgl_video_end_frame` flushes with a real
+- **Guest fix (`[kosmickrisp-guest]`, upstream candidate):** `virgl_video_end_frame` flushes with a real
   fence and hands it back through `picture->out_fence`, which makes `vaSyncSurface` wait. This is
   correct on any host: a synchronous host retires the fence after decoding, and this design's
   host retires it when the picture lands. It fixes the existing race whatever the host does.
@@ -237,7 +237,7 @@ Following the repo's RED-first convention:
 4. **Guest fence (enhanced).**
    - A small VA client (the `spikes/va-dmabuf-size` reproducer is most of it) decodes a frame,
      calls `vaSyncSurface`, maps the exported dmabuf and checks a pixel. Run it with the delay knob.
-   - RED on current mesa-guest: the read beats the picture.
+   - RED on the current vendor drivers: the read beats the picture.
    - GREEN with the fence fix, on the synchronous host and on the asynchronous one.
 5. **The desktop does not wait for video.**
    - END_FRAME's own cost during real playback stays far below a decode's.
@@ -257,9 +257,11 @@ Following the repo's RED-first convention:
    to 13 ms and 40% of flushes past a 60 Hz frame; asynchronous decode kept them at their
    real-speed 0.3 ms median and 5 ms p99 (`spikes/flush-latency/RESULTS.md`). What it does not
    isolate is other contexts' **fences**: see the backlog's fence-waiter entry.
-3. mesa-guest: END_FRAME emits a fence and sets the codec flag. It goes through the usual
-   delivery chain (`scripts/export-mesa-guest-patches.sh` → RPM → `deliver-payload.sh`) and is
-   an upstream candidate. Item 4 goes green.
+3. `[kosmickrisp-guest]`: END_FRAME emits a fence and sets the codec flag. It goes through the
+   usual delivery chain (a commit on `metal-native-context` and a pin bump →
+   `scripts/build-gpu-drivers.sh` → `scripts/package-gpu-drivers.sh` →
+   `scripts/package-enhanced.sh rNN` → `scripts/provision/deliver-payload.sh`) and is an
+   upstream candidate. Item 4 goes green.
 4. virglrs: lent targets decode asynchronously when their codec carries the flag, so a guest
    Vulkan consumer of decoded video gets the benefit too.
 
