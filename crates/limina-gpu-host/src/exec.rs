@@ -17,7 +17,7 @@ use block2::RcBlock;
 use dispatch2::DispatchData;
 use limina_gpu_wire::cmd::{self, BufRef, Command, Feedback, REPLY_DONE, Reply, op};
 use limina_gpu_wire::ring::{Consumer, Error, RingControl};
-use objc2::rc::Retained;
+use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSProcessInfo, NSRange, NSString};
 use objc2_metal::{
@@ -939,10 +939,13 @@ impl Executor {
                     if self.lost {
                         continue;
                     }
-                    let r = self
-                        .objects
-                        .note_command(n.op, n.payload)
-                        .and_then(|()| self.exec(n.op, n.payload));
+                    // Metal hands back autoreleased objects, every encoder among them, and a
+                    // thread without a pool of its own keeps those until it exits.
+                    let r = autoreleasepool(|_| {
+                        self.objects
+                            .note_command(n.op, n.payload)
+                            .and_then(|()| self.exec(n.op, n.payload))
+                    });
                     if let Err(e) = r {
                         log::warn!(
                             "context lost: {e:?} at ring position {} (op {:#x})",
@@ -953,8 +956,10 @@ impl Executor {
                     }
                 }
                 Ok(None) => {
-                    self.answer_mailbox();
-                    self.reap();
+                    autoreleasepool(|_| {
+                        self.answer_mailbox();
+                        self.reap();
+                    });
                     let since = *idle_since.get_or_insert_with(Instant::now);
                     if since.elapsed() < SPIN {
                         std::hint::spin_loop();
@@ -972,7 +977,7 @@ impl Executor {
                     // The ring cannot be parsed any further; sleep until destroyed.
                     while !stop.load(Ordering::Acquire) {
                         doorbell.wait();
-                        self.answer_mailbox();
+                        autoreleasepool(|_| self.answer_mailbox());
                     }
                 }
             }

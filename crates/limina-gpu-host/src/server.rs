@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use limina_gpu_wire::ring::{self, Consumer};
-use objc2::rc::Retained;
+use objc2::rc::{Retained, autoreleasepool};
 use objc2_metal::MTLDevice;
 
 use crate::exec::{Arenas, Executor, Mailbox, Placeholders, Surfaces};
@@ -116,7 +116,8 @@ fn serve() -> std::io::Result<()> {
         let Some(msg) = service.receive(None)? else {
             continue;
         };
-        server.handle(msg);
+        // Each request's autoreleased Metal objects, drained before the next (see `Executor::run`).
+        autoreleasepool(|_| server.handle(msg));
     }
 }
 

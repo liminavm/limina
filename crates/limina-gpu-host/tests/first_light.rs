@@ -2685,3 +2685,126 @@ fn an_arena_made_after_a_counter_heap_is_restored_at_its_address() {
     }
     fresh.restore_done().expect("done");
 }
+
+/// The GPU host's `phys_footprint`, what Activity Monitor shows as its memory.
+fn footprint(g: &Guest) -> u64 {
+    // SAFETY: zeroed POD that proc_pid_rusage fills; the buffer argument is `rusage_info_t`, a
+    // pointer to the struct.
+    let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::proc_pid_rusage(
+            g.host.pid(),
+            libc::RUSAGE_INFO_V2,
+            (&raw mut info).cast::<libc::rusage_info_t>(),
+        )
+    };
+    assert_eq!(rc, 0, "proc_pid_rusage");
+    info.ri_phys_footprint
+}
+
+/// One frame as a long-running client draws it: a command buffer with a render pass, committed
+/// and waited for.
+fn triangle_frame(g: &mut Guest) {
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    let mut pass = cmd::BeginRenderPass::default();
+    pass.colors[0] = cmd::RenderAttachment {
+        texture: 3,
+        load_action: LOAD_CLEAR,
+        store_action: STORE_STORE,
+        clear: [1.0, 0.0, 0.0, 1.0],
+        ..Default::default()
+    };
+    g.push(pass, &[]);
+    g.push(cmd::SetRenderPipeline { handle: 2, _pad: 0 }, &[]);
+    g.push(
+        cmd::SetArgumentTable {
+            table: 4,
+            stages: RENDER_VERTEX,
+        },
+        &[],
+    );
+    g.push(
+        cmd::Draw {
+            primitive: PRIM_TRIANGLE,
+            vertex_count: 3,
+            instance_count: 1,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("frame");
+}
+
+#[test]
+fn drawing_frames_does_not_grow_the_gpu_host() {
+    let mut g = start();
+    g.write(MIB, &[0; 48]);
+    create_library(&mut g, 1, MSL, BufRef::NONE);
+    let mut colors = [0u32; cmd::MAX_COLOR_ATTACHMENTS];
+    colors[0] = RGBA8_UNORM;
+    g.push(
+        cmd::CreateRenderPipeline {
+            handle: 2,
+            vertex_library: 1,
+            fragment_library: 1,
+            vertex_name_len: 2,
+            fragment_name_len: 2,
+            color_formats: colors,
+            raster_sample_count: 1,
+            rasterization_enabled: 1,
+            ..Default::default()
+        },
+        &[b"vs", b"fs"],
+    );
+    g.push(
+        cmd::CreateTexture {
+            handle: 3,
+            arena: 1,
+            offset: 4 * MIB,
+            desc: cmd::TextureDesc {
+                texture_type: TEX_2D,
+                pixel_format: RGBA8_UNORM,
+                width: 64,
+                height: 64,
+                depth: 1,
+                mip_levels: 1,
+                array_length: 1,
+                sample_count: 1,
+                usage: USAGE_RENDER_TARGET,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        &[],
+    );
+    let base = g.arena.gpu_base;
+    table(&mut g, 4, &[(0, base + MIB)]);
+
+    // Warm up: Metal's caches and pools fill over the first frames.
+    for _ in 0..500 {
+        triangle_frame(&mut g);
+    }
+    let before = footprint(&g);
+    const FRAMES: u64 = 5000;
+    for _ in 0..FRAMES {
+        triangle_frame(&mut g);
+    }
+    let after = footprint(&g);
+    let grew = after.saturating_sub(before);
+    eprintln!(
+        "{FRAMES} frames: {} KiB -> {} KiB ({} bytes a frame)",
+        before >> 10,
+        after >> 10,
+        grew / FRAMES
+    );
+    // Steady-state frames must reuse what the earlier ones freed: a few pages of slack, not
+    // memory in proportion to the frame count. Each frame's render encoder, autoreleased and
+    // never drained, cost about 240 bytes here and grew a desktop's GPU host by 79 GiB in two days.
+    assert!(
+        grew < 256 << 10,
+        "the GPU host grew {} KiB over {FRAMES} frames",
+        grew >> 10
+    );
+}
