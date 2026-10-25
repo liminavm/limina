@@ -1269,12 +1269,13 @@ reaches the command ring's consumer, the executor's decoders or the library load
 and every command come from a guest. Next: a ring-consumer target and an executor-decode target
 (no Metal needed for the decode half), then the loader (previous entries).
 
-### Lead, unconfirmed: the GPU host may inherit the worker's descriptors
+### The GPU host inherits the worker's descriptors
 `GpuHost::spawn` starts the GPU host with `posix_spawn` and no file actions or attributes
 (`crates/limina-gpu-host/src/client.rs`), so every worker descriptor not marked close-on-exec
-crosses into it. Whether any does is not checked. Next: list the GPU host's open descriptors on a
-running VM (`lsof -p`); if any are the worker's, spawn with `POSIX_SPAWN_CLOEXEC_DEFAULT` and pass
-only what it needs.
+crosses into it. Observed on a dogfood VM (`lsof -p` on its GPU host): descriptors 10 to 38, one
+for each `--*-fd` on the worker's command line (control, input, spice, QGA, debug port, serial,
+balloon, FIDO and the rest), all open in the GPU host. Fix: spawn with
+`POSIX_SPAWN_CLOEXEC_DEFAULT` and pass only what it needs.
 
 ### Fence order within a file is only a userspace promise
 All of a file's fences share one dma-fence context (`lf->fence_ctx` in

@@ -9,6 +9,11 @@
 //!
 //! Arena pages survive a GPU host crash: the worker's mapping holds them
 //! (`spikes/replayer-ipc/RESULTS.md`).
+//!
+//! Every thread here that calls Metal drains an autorelease pool per unit of work (a ring command,
+//! a request). Metal autoreleases what it hands back, encoders included, and a thread without a
+//! pool of its own keeps all of it until it exits: a ring thread lives as long as its context.
+//! `heap(1)` on a test's GPU host (its pid is `GpuHost::pid`) names what piles up.
 
 pub mod client;
 mod exec;
