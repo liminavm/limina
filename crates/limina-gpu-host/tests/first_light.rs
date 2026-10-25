@@ -2829,6 +2829,20 @@ fn stats_count_what_the_gpu_host_holds() {
     assert_eq!(st.arena_bytes, g.arena.mapping.size(), "{st:?}");
     assert_eq!((st.objects, st.buried), (4, 0), "{st:?}");
     assert!(st.heap > 0 && st.footprint > st.heap, "{st:?}");
+    // The library's record holds its MSL source.
+    assert!(st.record_bytes >= MSL.len() as u64, "{st:?}");
+    let (contexts, total) = g.host.context_stats().expect("context stats");
+    assert_eq!((contexts.len(), total), (1, 1));
+    let c = contexts[0];
+    assert_eq!(
+        (c.ctx, c.objects, c.buried, c.arenas),
+        (1, 4, 0, 1),
+        "{c:?}"
+    );
+    assert_eq!(
+        (c.arena_bytes, c.record_bytes),
+        (st.arena_bytes, st.record_bytes)
+    );
 
     // A destroyed object waits for the commit after its destroy before it is let go.
     g.push(cmd::Destroy { handle: 3, _pad: 0 }, &[]);
@@ -2841,6 +2855,11 @@ fn stats_count_what_the_gpu_host_holds() {
     wait_until("the grave is reaped", || {
         g.host.stats().unwrap().buried == 0
     });
+    let (contexts, _) = g.host.context_stats().expect("context stats");
+    assert!(
+        contexts[0].record_bytes < st.record_bytes,
+        "a destroyed object's record leaves the count"
+    );
 
     let other = g.host.create_arena(1, 2, MIB).expect("second arena");
     g.host.export_arena(1, 2, 7).expect("export");

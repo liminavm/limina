@@ -45,6 +45,9 @@ pub const RESTORE_CONTEXT: i32 = 0x4c47_000e;
 /// `{}` → [`Stats`]: what the GPU host holds and what it costs, for `limina debug` and its own
 /// periodic log line.
 pub const STATS: i32 = 0x4c47_000f;
+/// `{}` → [`ContextStatsReply`]: [`Stats`]' per-context counts, for the contexts holding the most
+/// objects.
+pub const CONTEXT_STATS: i32 = 0x4c47_0010;
 
 /// Request statuses.
 pub const OK: i32 = 0;
@@ -201,6 +204,50 @@ pub struct Stats {
     /// Objects destroyed and waiting for the GPU to finish with them.
     pub buried: u32,
     pub _pad2: u32,
+    /// The payload bytes of the live objects' creation records, kept for a restore: heap that
+    /// grows with what the guest holds.
+    pub record_bytes: u64,
+}
+
+/// One context's share of [`Stats`].
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ContextStats {
+    pub ctx: u32,
+    pub objects: u32,
+    pub buried: u32,
+    pub arenas: u32,
+    pub surfaces: u32,
+    pub _pad: u32,
+    pub arena_bytes: u64,
+    pub record_bytes: u64,
+}
+
+/// The most contexts a [`ContextStatsReply`] carries, to fit a reply message.
+pub const MAX_CONTEXT_STATS: usize = 64;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ContextStatsReply {
+    pub status: i32,
+    /// Entries of `contexts` in use, the contexts holding the most objects first.
+    pub count: u32,
+    /// Contexts there are, `count` of them here.
+    pub total: u32,
+    pub _pad: u32,
+    pub contexts: [ContextStats; MAX_CONTEXT_STATS],
+}
+
+impl Default for ContextStatsReply {
+    fn default() -> Self {
+        Self {
+            status: 0,
+            count: 0,
+            total: 0,
+            _pad: 0,
+            contexts: [ContextStats::default(); MAX_CONTEXT_STATS],
+        }
+    }
 }
 
 // SAFETY: all of these are repr(C) integers with explicit padding.
@@ -218,3 +265,5 @@ unsafe impl Pod for ExportReply {}
 unsafe impl Pod for RestoreArena {}
 unsafe impl Pod for RestoreContext {}
 unsafe impl Pod for Stats {}
+unsafe impl Pod for ContextStats {}
+unsafe impl Pod for ContextStatsReply {}

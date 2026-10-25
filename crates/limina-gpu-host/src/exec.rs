@@ -95,6 +95,8 @@ pub struct Mailbox {
     pub objects: AtomicU32,
     /// Destroyed objects waiting in the graveyard.
     pub buried: AtomicU32,
+    /// The payload bytes of the live objects' records.
+    pub record_bytes: AtomicU64,
 }
 /// The surfaces the worker filed for a context, by the guest resource that names each.
 pub type Surfaces = Arc<Mutex<HashMap<u32, metal::Surface>>>;
@@ -173,6 +175,8 @@ struct Window {
 struct Objects {
     map: HashMap<u32, Entry>,
     window: Option<Window>,
+    /// The payload bytes of the live objects' own records, for [`crate::ipc::Stats`].
+    record_bytes: usize,
 }
 
 impl Objects {
@@ -203,7 +207,7 @@ impl Objects {
                 last.2 = rec.value;
             }
         }
-        self.map.insert(
+        self.put(
             h,
             Entry {
                 obj,
@@ -212,8 +216,17 @@ impl Objects {
         );
     }
 
+    /// Files `e` under `h`, keeping [`Self::record_bytes`].
+    fn put(&mut self, h: u32, e: Entry) {
+        self.record_bytes += e.rec.payload.len();
+        if let Some(old) = self.map.insert(h, e) {
+            self.record_bytes -= old.rec.payload.len();
+        }
+    }
+
     fn remove(&mut self, h: &u32) -> Option<Object> {
         let e = self.map.remove(h)?;
+        self.record_bytes -= e.rec.payload.len();
         if let Some(w) = &mut self.window
             && !w.created.remove(h)
         {
@@ -227,6 +240,7 @@ impl Objects {
 
     fn take_all(&mut self) -> Vec<Object> {
         self.window = None;
+        self.record_bytes = 0;
         std::mem::take(&mut self.map)
             .into_values()
             .map(|e| e.obj)
@@ -798,7 +812,7 @@ impl Executor {
             for (&h, &at) in named.iter().zip(&o.refs) {
                 let (obj, rec) = &made[at as usize];
                 let obj = obj.as_ref().and_then(share).ok_or(Error::Restore)?;
-                scratch.map.insert(
+                scratch.put(
                     h,
                     Entry {
                         obj,
@@ -829,7 +843,7 @@ impl Executor {
                 if self.objects.contains_key(&o.handle) {
                     return Err(Error::Restore);
                 }
-                self.objects.map.insert(
+                self.objects.put(
                     o.handle,
                     Entry {
                         obj,
@@ -962,6 +976,9 @@ impl Executor {
                     self.mailbox
                         .objects
                         .store(self.objects.map.len() as u32, Ordering::Relaxed);
+                    self.mailbox
+                        .record_bytes
+                        .store(self.objects.record_bytes as u64, Ordering::Relaxed);
                 }
                 Ok(None) => {
                     autoreleasepool(|_| {

@@ -322,6 +322,15 @@ impl GpuHost {
         ipc::Stats::read(&r.data).ok_or_else(|| io::Error::other("short reply"))
     }
 
+    /// The contexts holding the most objects, most first, and how many contexts there are.
+    pub fn context_stats(&self) -> io::Result<(Vec<ipc::ContextStats>, u32)> {
+        let r = self.call(ipc::CONTEXT_STATS, &[])?;
+        let a =
+            ipc::ContextStatsReply::read(&r.data).ok_or_else(|| io::Error::other("short reply"))?;
+        let n = (a.count as usize).min(ipc::MAX_CONTEXT_STATS);
+        Ok((a.contexts[..n].to_vec(), a.total))
+    }
+
     pub fn destroy_arena(&self, ctx: u32, arena: u32) -> io::Result<()> {
         self.simple(
             "arena destroy",

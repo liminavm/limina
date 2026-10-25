@@ -267,6 +267,7 @@ impl Server {
                 },
             },
             ipc::STATS => (Message::new(0, self.stats().bytes()), vec![]),
+            ipc::CONTEXT_STATS => (Message::new(0, self.context_stats().bytes()), vec![]),
             ipc::RESTORE_DONE => {
                 self.placeholders.clear();
                 self.id_placeholders = Placeholders::default();
@@ -323,6 +324,7 @@ impl Server {
             st.surfaces += lock(&c.surfaces).len() as u32;
             st.objects += c.mailbox.objects.load(Ordering::Relaxed);
             st.buried += c.mailbox.buried.load(Ordering::Relaxed);
+            st.record_bytes += c.mailbox.record_bytes.load(Ordering::Relaxed);
             for a in lock(&c.arenas).values() {
                 arenas.insert(Arc::as_ptr(a), a.size);
             }
@@ -336,6 +338,35 @@ impl Server {
         st.arenas = arenas.len() as u32;
         st.arena_bytes = arenas.values().sum();
         st
+    }
+
+    fn context_stats(&self) -> ipc::ContextStatsReply {
+        let mut all: Vec<ipc::ContextStats> = self
+            .contexts
+            .iter()
+            .map(|(&ctx, c)| {
+                let arenas = lock(&c.arenas);
+                ipc::ContextStats {
+                    ctx,
+                    objects: c.mailbox.objects.load(Ordering::Relaxed),
+                    buried: c.mailbox.buried.load(Ordering::Relaxed),
+                    arenas: arenas.len() as u32,
+                    surfaces: lock(&c.surfaces).len() as u32,
+                    arena_bytes: arenas.values().map(|a| a.size).sum(),
+                    record_bytes: c.mailbox.record_bytes.load(Ordering::Relaxed),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        all.sort_by_key(|c| (std::cmp::Reverse(c.objects), c.ctx));
+        let mut r = ipc::ContextStatsReply {
+            total: all.len() as u32,
+            ..Default::default()
+        };
+        all.truncate(ipc::MAX_CONTEXT_STATS);
+        r.count = all.len() as u32;
+        r.contexts[..all.len()].copy_from_slice(&all);
+        r
     }
 
     /// Logs what the GPU host holds, at `warn` when its heap or its footprint beyond the arenas
@@ -713,7 +744,7 @@ pub fn describe(st: &ipc::Stats) -> String {
     const MIB: u64 = 1 << 20;
     format!(
         "gpu-host: footprint {} MiB, heap {} MiB, arenas {} ({} MiB), contexts {} ({} with a \
-         ring), exports {}, surfaces {}, objects {}, buried {}",
+         ring), exports {}, surfaces {}, objects {} (records {} MiB), buried {}",
         st.footprint / MIB,
         st.heap / MIB,
         st.arenas,
@@ -723,7 +754,24 @@ pub fn describe(st: &ipc::Stats) -> String {
         st.exports,
         st.surfaces,
         st.objects,
+        st.record_bytes / MIB,
         st.buried
+    )
+}
+
+/// One line per context, as `limina debug` lists the contexts holding the most objects.
+pub fn describe_context(c: &ipc::ContextStats) -> String {
+    const MIB: u64 = 1 << 20;
+    format!(
+        "gpu-host context {}: objects {} (records {} KiB), buried {}, arenas {} ({} MiB), \
+         surfaces {}",
+        c.ctx,
+        c.objects,
+        c.record_bytes >> 10,
+        c.buried,
+        c.arenas,
+        c.arena_bytes / MIB,
+        c.surfaces
     )
 }
 

@@ -56,7 +56,7 @@ fn answer(line: &str) -> String {
     match Request::parse(line) {
         Ok(Request::Status) => {
             let mut lines = format!("log worker {}\n", limina_debug::logger::filter_spec());
-            if let Some(gpu) = crate::krun::metal_ext::status_line() {
+            for gpu in crate::krun::metal_ext::status_lines() {
                 lines += &gpu;
                 lines += "\n";
             }

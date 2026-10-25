@@ -27,14 +27,29 @@ pub const ARENA_WINDOW: usize = 16 << 30;
 /// The extension [`start`] made, for [`status_line`]; the device owns it.
 static LIVE: Mutex<Weak<GpuHostExtension>> = Mutex::new(Weak::new());
 
-/// What the GPU host holds and what it costs, as `limina debug <vm> status` shows it; `None`
-/// without one.
-pub fn status_line() -> Option<String> {
-    let ext = LIVE.lock().unwrap_or_else(|e| e.into_inner()).upgrade()?;
-    Some(match ext.host.stats() {
+/// The contexts `limina debug <vm> status` lists, those holding the most objects.
+const STATUS_CONTEXTS: usize = 8;
+
+/// What the GPU host holds and what it costs, as `limina debug <vm> status` shows it: a line for
+/// the whole, then one for each of the contexts holding the most objects. Empty without one.
+pub fn status_lines() -> Vec<String> {
+    let Some(ext) = LIVE.lock().unwrap_or_else(|e| e.into_inner()).upgrade() else {
+        return Vec::new();
+    };
+    let mut lines = vec![match ext.host.stats() {
         Ok(st) => limina_gpu_host::server::describe(&st),
         Err(e) => format!("gpu-host: no stats: {e}"),
-    })
+    }];
+    match ext.host.context_stats() {
+        Ok((contexts, _)) => lines.extend(
+            contexts
+                .iter()
+                .take(STATUS_CONTEXTS)
+                .map(limina_gpu_host::server::describe_context),
+        ),
+        Err(e) => lines.push(format!("gpu-host: no context stats: {e}")),
+    }
+    lines
 }
 
 struct GpuHostExtension {
