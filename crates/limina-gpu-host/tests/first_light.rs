@@ -19,6 +19,8 @@ const BGRA8_UNORM: u32 = 80;
 const TEX_2D: u32 = 2;
 const USAGE_SHADER_READ: u32 = 1;
 const USAGE_RENDER_TARGET: u32 = 4;
+const LOAD_DONT_CARE: u32 = 0;
+const LOAD_LOAD: u32 = 1;
 const LOAD_CLEAR: u32 = 2;
 const STORE_STORE: u32 = 1;
 const PRIM_TRIANGLE: u32 = 3;
@@ -2813,6 +2815,37 @@ fn drawing_frames_does_not_grow_the_gpu_host() {
         "the GPU host grew {} KiB over {FRAMES} frames",
         grew >> 10
     );
+}
+
+/// A render pass over `texture: 3` whose color attachment loads or clears with `clear`.
+fn clear_pass(g: &mut Guest, load_action: u32, clear: [f64; 4]) -> Result<(), (u32, u64)> {
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    let mut pass = cmd::BeginRenderPass::default();
+    pass.colors[0] = cmd::RenderAttachment {
+        texture: 3,
+        load_action,
+        store_action: STORE_STORE,
+        clear,
+        ..Default::default()
+    };
+    g.push(pass, &[]);
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait()
+}
+
+/// A clear value only means something to an attachment that clears: zink hands every pass its
+/// slot's last one, and KosmicKrisp converts it by the attachment's format, so an integer clear's
+/// all-ones bits reach a float attachment that loads as NaN. Refusing it lost Firefox's context.
+#[test]
+fn a_clear_value_an_attachment_does_not_clear_with_keeps_the_context() {
+    let mut g = start();
+    triangle_setup(&mut g);
+    clear_pass(&mut g, LOAD_LOAD, [f64::NAN; 4]).expect("a load ignores its clear value");
+    clear_pass(&mut g, LOAD_DONT_CARE, [f64::INFINITY; 4]).expect("so does a don't-care");
+    clear_pass(&mut g, LOAD_CLEAR, [f64::NAN, 1.0, f64::INFINITY, 1.0])
+        .expect("Metal clears with it");
+    triangle_frame(&mut g);
 }
 
 #[test]

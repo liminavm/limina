@@ -2619,23 +2619,31 @@ impl Executor {
             if a.texture == 0 {
                 continue;
             }
-            check(a.clear.iter().all(|f| f.is_finite()))?;
             // SAFETY: i < MAX_COLOR_ATTACHMENTS (8), the Metal limit.
             let att = unsafe { desc.colorAttachments().objectAtIndexedSubscript(i) };
             attach(&att, a)?;
-            att.setClearColor(MTLClearColor {
-                red: a.clear[0],
-                green: a.clear[1],
-                blue: a.clear[2],
-                alpha: a.clear[3],
-            });
+            // Only an attachment that clears reads its clear value; the guest passes a stale one
+            // to every other (see first_light's test of it).
+            if MTLLoadAction(a.load_action as usize) == MTLLoadAction::Clear {
+                att.setClearColor(MTLClearColor {
+                    red: a.clear[0],
+                    green: a.clear[1],
+                    blue: a.clear[2],
+                    alpha: a.clear[3],
+                });
+            }
             any = true;
         }
         if c.depth.texture != 0 {
-            check(c.depth.resolve_filter <= 2 && (0.0..=1.0).contains(&c.depth.clear[0]))?;
+            let clears = MTLLoadAction(c.depth.load_action as usize) == MTLLoadAction::Clear;
+            check(
+                c.depth.resolve_filter <= 2 && (!clears || (0.0..=1.0).contains(&c.depth.clear[0])),
+            )?;
             let att = desc.depthAttachment();
             attach(&att, &c.depth)?;
-            att.setClearDepth(c.depth.clear[0]);
+            if clears {
+                att.setClearDepth(c.depth.clear[0]);
+            }
             att.setDepthResolveFilter(MTLMultisampleDepthResolveFilter(
                 c.depth.resolve_filter as usize,
             ));
