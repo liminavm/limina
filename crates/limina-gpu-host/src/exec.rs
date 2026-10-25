@@ -97,6 +97,8 @@ pub struct Mailbox {
     pub buried: AtomicU32,
     /// The payload bytes of the live objects' records.
     pub record_bytes: AtomicU64,
+    /// `objects` by kind, as [`crate::ipc::ContextStats::kinds`] counts them.
+    pub kinds: [AtomicU32; crate::ipc::KINDS.len()],
 }
 /// The surfaces the worker filed for a context, by the guest resource that names each.
 pub type Surfaces = Arc<Mutex<HashMap<u32, metal::Surface>>>;
@@ -177,6 +179,8 @@ struct Objects {
     window: Option<Window>,
     /// The payload bytes of the live objects' own records, for [`crate::ipc::Stats`].
     record_bytes: usize,
+    /// The live objects by [`kind`].
+    kinds: [u32; crate::ipc::KINDS.len()],
 }
 
 impl Objects {
@@ -216,17 +220,26 @@ impl Objects {
         );
     }
 
-    /// Files `e` under `h`, keeping [`Self::record_bytes`].
+    /// Files `e` under `h`, keeping [`Self::record_bytes`] and [`Self::kinds`].
     fn put(&mut self, h: u32, e: Entry) {
-        self.record_bytes += e.rec.payload.len();
+        self.count(&e.rec, 1);
         if let Some(old) = self.map.insert(h, e) {
-            self.record_bytes -= old.rec.payload.len();
+            self.count(&old.rec, -1);
+        }
+    }
+
+    fn count(&mut self, rec: &Record, by: isize) {
+        self.record_bytes = self
+            .record_bytes
+            .wrapping_add_signed(by * rec.payload.len() as isize);
+        if let Some(k) = kind(rec.op) {
+            self.kinds[k] = self.kinds[k].wrapping_add_signed(by as i32);
         }
     }
 
     fn remove(&mut self, h: &u32) -> Option<Object> {
         let e = self.map.remove(h)?;
-        self.record_bytes -= e.rec.payload.len();
+        self.count(&e.rec, -1);
         if let Some(w) = &mut self.window
             && !w.created.remove(h)
         {
@@ -241,6 +254,7 @@ impl Objects {
     fn take_all(&mut self) -> Vec<Object> {
         self.window = None;
         self.record_bytes = 0;
+        self.kinds = Default::default();
         std::mem::take(&mut self.map)
             .into_values()
             .map(|e| e.obj)
@@ -634,6 +648,25 @@ fn is_create(op: u16) -> bool {
     )
 }
 
+/// The index in [`crate::ipc::KINDS`] of what create `op` makes.
+fn kind(op: u16) -> Option<usize> {
+    Some(match op {
+        op::CREATE_TEXTURE => 0,
+        op::CREATE_TEXTURE_FROM_SURFACE => 1,
+        op::CREATE_TEXTURE_VIEW => 2,
+        op::CREATE_SAMPLER => 3,
+        op::CREATE_LIBRARY | op::CREATE_LIBRARY_DATA => 4,
+        op::CREATE_RENDER_PIPELINE => 5,
+        op::CREATE_COMPUTE_PIPELINE => 6,
+        op::CREATE_DEPTH_STENCIL => 7,
+        op::CREATE_ARGUMENT_TABLE => 8,
+        op::CREATE_SYNC => 9,
+        op::CREATE_COUNTER_HEAP => 10,
+        op::CREATE_QUEUE => 11,
+        _ => return None,
+    })
+}
+
 /// Tries an import makes at bringing one object to its recorded resource ID.
 const FILL_TRIES: usize = 100;
 
@@ -979,6 +1012,9 @@ impl Executor {
                     self.mailbox
                         .record_bytes
                         .store(self.objects.record_bytes as u64, Ordering::Relaxed);
+                    for (to, &n) in self.mailbox.kinds.iter().zip(&self.objects.kinds) {
+                        to.store(n, Ordering::Relaxed);
+                    }
                 }
                 Ok(None) => {
                     autoreleasepool(|_| {

@@ -2843,6 +2843,23 @@ fn stats_count_what_the_gpu_host_holds() {
         (c.arena_bytes, c.record_bytes),
         (st.arena_bytes, st.record_bytes)
     );
+    let kinds = |c: &limina_gpu_host::ipc::ContextStats| {
+        limina_gpu_host::ipc::KINDS
+            .iter()
+            .zip(c.kinds)
+            .filter(|(_, n)| *n != 0)
+            .map(|(k, n)| (*k, n))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        kinds(&c),
+        [
+            ("textures", 1),
+            ("libraries", 1),
+            ("render pipelines", 1),
+            ("argument tables", 1)
+        ]
+    );
 
     // A destroyed object waits for the commit after its destroy before it is let go.
     g.push(cmd::Destroy { handle: 3, _pad: 0 }, &[]);
@@ -2859,6 +2876,14 @@ fn stats_count_what_the_gpu_host_holds() {
     assert!(
         contexts[0].record_bytes < st.record_bytes,
         "a destroyed object's record leaves the count"
+    );
+    assert_eq!(
+        kinds(&contexts[0]),
+        [
+            ("libraries", 1),
+            ("render pipelines", 1),
+            ("argument tables", 1)
+        ]
     );
 
     let other = g.host.create_arena(1, 2, MIB).expect("second arena");

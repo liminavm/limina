@@ -221,10 +221,28 @@ pub struct ContextStats {
     pub _pad: u32,
     pub arena_bytes: u64,
     pub record_bytes: u64,
+    /// `objects` by kind, in [`KINDS`]' order.
+    pub kinds: [u32; KINDS.len()],
 }
 
+/// The kinds of object [`ContextStats::kinds`] counts, by the create that made each.
+pub const KINDS: [&str; 12] = [
+    "textures",
+    "surface textures",
+    "views",
+    "samplers",
+    "libraries",
+    "render pipelines",
+    "compute pipelines",
+    "depth-stencil states",
+    "argument tables",
+    "syncs",
+    "counter heaps",
+    "queues",
+];
+
 /// The most contexts a [`ContextStatsReply`] carries, to fit a reply message.
-pub const MAX_CONTEXT_STATS: usize = 64;
+pub const MAX_CONTEXT_STATS: usize = 32;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -249,6 +267,11 @@ impl Default for ContextStatsReply {
         }
     }
 }
+
+const _: () = assert!(
+    size_of::<ContextStatsReply>() + 256 <= crate::mach::RECV_BUFFER_BYTES,
+    "a context stats reply must fit a message"
+);
 
 // SAFETY: all of these are repr(C) integers with explicit padding.
 unsafe impl Pod for CtxRequest {}

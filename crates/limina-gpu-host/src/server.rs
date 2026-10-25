@@ -354,6 +354,11 @@ impl Server {
                     surfaces: lock(&c.surfaces).len() as u32,
                     arena_bytes: arenas.values().map(|a| a.size).sum(),
                     record_bytes: c.mailbox.record_bytes.load(Ordering::Relaxed),
+                    kinds: c
+                        .mailbox
+                        .kinds
+                        .each_ref()
+                        .map(|k| k.load(Ordering::Relaxed)),
                     ..Default::default()
                 }
             })
@@ -762,7 +767,7 @@ pub fn describe(st: &ipc::Stats) -> String {
 /// One line per context, as `limina debug` lists the contexts holding the most objects.
 pub fn describe_context(c: &ipc::ContextStats) -> String {
     const MIB: u64 = 1 << 20;
-    format!(
+    let mut line = format!(
         "gpu-host context {}: objects {} (records {} KiB), buried {}, arenas {} ({} MiB), \
          surfaces {}",
         c.ctx,
@@ -772,7 +777,15 @@ pub fn describe_context(c: &ipc::ContextStats) -> String {
         c.arenas,
         c.arena_bytes / MIB,
         c.surfaces
-    )
+    );
+    let mut sep = "; ";
+    for (name, &n) in ipc::KINDS.iter().zip(&c.kinds) {
+        if n != 0 {
+            line += &format!("{sep}{name} {n}");
+            sep = ", ";
+        }
+    }
+    line
 }
 
 /// This process's `phys_footprint`: what macOS bills it, Activity Monitor's "Memory".

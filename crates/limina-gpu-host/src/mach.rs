@@ -26,7 +26,7 @@ const HEADER_BYTES: usize = 24;
 const BODY_BYTES: usize = 4;
 const PORT_DESCRIPTOR_BYTES: usize = 12;
 /// Largest message either side sends, trailer included.
-const RECV_BUFFER_BYTES: usize = 4096;
+pub const RECV_BUFFER_BYTES: usize = 4096;
 /// Most ports one message carries.
 const MAX_PORTS: usize = 4;
 
