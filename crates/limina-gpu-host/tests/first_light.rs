@@ -2848,6 +2848,67 @@ fn a_clear_value_an_attachment_does_not_clear_with_keeps_the_context() {
     triangle_frame(&mut g);
 }
 
+/// KosmicKrisp asks for a depth-aspect copy's plane whatever the format, so a depth-only texture
+/// arrives with DepthFromDepthStencil: its only plane, not a value to lose the context over. The
+/// copy round-trips the depth values, as the plain copy would.
+#[test]
+fn a_depth_only_copy_naming_its_plane_keeps_the_context() {
+    const DEPTH32_FLOAT: u32 = 252;
+    const DEPTH_FROM_DEPTH_STENCIL: u32 = 1;
+    const SRC: u64 = 2 * MIB;
+    const DST: u64 = 3 * MIB;
+    let mut g = start();
+    let depths: Vec<u8> = (0..16 * 16)
+        .flat_map(|i| (i as f32 / 256.0).to_le_bytes())
+        .collect();
+    g.write(SRC, &depths);
+    g.write(DST, &[0; 16 * 16 * 4]);
+    g.push(
+        cmd::CreateTexture {
+            handle: 3,
+            arena: 1,
+            offset: 4 * MIB,
+            desc: cmd::TextureDesc {
+                texture_type: TEX_2D,
+                pixel_format: DEPTH32_FLOAT,
+                width: 16,
+                height: 16,
+                depth: 1,
+                mip_levels: 1,
+                array_length: 1,
+                sample_count: 1,
+                usage: USAGE_RENDER_TARGET | USAGE_SHADER_READ,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        &[],
+    );
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    for (to_texture, at) in [(1, SRC), (0, DST)] {
+        g.push(
+            cmd::CopyBufferTexture {
+                texture: 3,
+                size: [16, 16, 1],
+                buffer: BufRef::new(1, at),
+                bytes_per_row: 16 * 4,
+                bytes_per_image: 16 * 16 * 4,
+                options: DEPTH_FROM_DEPTH_STENCIL,
+                to_texture,
+                ..Default::default()
+            },
+            &[],
+        );
+        barrier(&mut g, STAGE_BLIT, STAGE_BLIT);
+    }
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait()
+        .expect("a depth copy of a depth-only texture");
+    assert_eq!(g.bytes(DST, depths.len()), &depths[..]);
+}
+
 #[test]
 fn stats_count_what_the_gpu_host_holds() {
     let mut g = start();

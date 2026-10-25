@@ -216,13 +216,16 @@ fn astc_block(i: u32) -> Option<(u32, u32)> {
     })
 }
 
-/// The layout a buffer<->texture copy with `MTLBlitOption` `options` uses for `format`: one
-/// plane of a combined depth-stencil format, or the format itself.
-pub fn copy_format_info(format: u32, options: u32) -> Option<FormatInfo> {
+/// The layout a buffer<->texture copy with `MTLBlitOption` `options` uses for `format`, and the
+/// option to hand Metal: one plane of a combined depth-stencil format, or the format itself. A
+/// depth-only or stencil-only format named with its own plane is that format, copied with no
+/// option; KosmicKrisp names the plane of every depth or stencil copy.
+pub fn copy_format_info(format: u32, options: u32) -> Option<(FormatInfo, u32)> {
     match (format, options) {
-        (_, 0) => format_info(format),
-        (260, 1) => Some(texel(4)), // DepthFromDepthStencil
-        (260, 2) => Some(texel(1)), // StencilFromDepthStencil
+        (_, 0) => format_info(format).map(|f| (f, 0)),
+        (260, 1) => Some((texel(4), 1)), // DepthFromDepthStencil
+        (260, 2) => Some((texel(1), 2)), // StencilFromDepthStencil
+        (250 | 252, 1) | (253, 2) => format_info(format).map(|f| (f, 0)),
         _ => None,
     }
 }

@@ -473,8 +473,27 @@ fn text(bytes: &[u8]) -> Result<Retained<NSString>, Error> {
     Ok(NSString::from_str(s))
 }
 
+/// A value the guest sent that this command cannot take. It names the check that refused it,
+/// since a lost context's log line names only the command.
+macro_rules! bad {
+    () => {{
+        log::warn!("bad value: refused at {}:{}", file!(), line!());
+        Error::BadValue
+    }};
+    ($($what:tt)+) => {{
+        log::warn!("bad value: refused at {}:{}: {}", file!(), line!(), format_args!($($what)+));
+        Error::BadValue
+    }};
+}
+
+#[track_caller]
 fn check(ok: bool) -> R {
-    if ok { Ok(()) } else { Err(Error::BadValue) }
+    if ok {
+        Ok(())
+    } else {
+        log::warn!("bad value: refused at {}", std::panic::Location::caller());
+        Err(Error::BadValue)
+    }
 }
 
 /// Bytes of a scalar `MTLDataType` a function constant may take, or `None` for any other type.
@@ -499,7 +518,7 @@ fn function(
     let name = text(name)?;
     let values = MTLFunctionConstantValues::new();
     for k in consts {
-        let size = constant_size(k.data_type).ok_or(Error::BadValue)?;
+        let size = constant_size(k.data_type).ok_or_else(|| bad!())?;
         check(
             k.index <= u16::MAX as u32
                 && (size == 8 || k.value >> (8 * size) == 0)
@@ -1253,7 +1272,7 @@ impl Executor {
             op::CREATE_LIBRARY_DATA => {
                 let (c, rest) = arg::<cmd::CreateLibraryData>(p)?;
                 check(c.data.is_none())?;
-                let len = u32::try_from(c.data_len).map_err(|_| Error::BadValue)?;
+                let len = u32::try_from(c.data_len).map_err(|_| bad!())?;
                 let (data, _) = take(rest, len)?;
                 (c.handle, Some(c.reply), self.create_library_data(&c, data))
             }
@@ -1565,7 +1584,7 @@ impl Executor {
                         0,
                         0,
                     ]),
-                    None => Err(Error::BadValue),
+                    None => Err(bad!()),
                 };
                 self.answer(c.reply, r)
             }
@@ -1626,7 +1645,7 @@ impl Executor {
                         ),
                     cmd::barrier_kind::AFTER_QUEUE_STAGES => enc
                         .barrierAfterQueueStages_beforeStages_visibilityOptions(after, before, vis),
-                    _ => return Err(Error::BadValue),
+                    _ => return Err(bad!()),
                 }
                 Ok(())
             }
@@ -1672,7 +1691,7 @@ impl Executor {
                             )
                         }
                     }
-                    Encoder::Compute { .. } => return Err(Error::BadValue),
+                    Encoder::Compute { .. } => return Err(bad!()),
                     Encoder::None => return Err(Error::BadState),
                 }
                 Ok(())
@@ -2055,7 +2074,7 @@ impl Executor {
             )?;
             let desc = self.texture_descriptor(&d)?;
             desc.setResourceOptions(metal::arena_options());
-            let fmt = metal::format_info(d.pixel_format).ok_or(Error::BadValue)?;
+            let fmt = metal::format_info(d.pixel_format).ok_or_else(|| bad!())?;
             let pixel_format = MTLPixelFormat(d.pixel_format as usize);
             let align = if texel_buffer {
                 self.device
@@ -2065,7 +2084,7 @@ impl Executor {
                     .minimumLinearTextureAlignmentForPixelFormat(pixel_format)
             } as u64;
             let len = linear_extent(fmt, [d.width, d.height, 1], c.bytes_per_row, 0)
-                .ok_or(Error::BadValue)?;
+                .ok_or_else(|| bad!())?;
             if align == 0
                 || !c.offset.is_multiple_of(align)
                 || !(texel_buffer || c.bytes_per_row.is_multiple_of(align))
@@ -2079,7 +2098,7 @@ impl Executor {
                 c.bytes_per_row as usize,
             )
         }
-        .ok_or(Error::BadValue)?;
+        .ok_or_else(|| bad!())?;
         let id = resource_id(t.gpuResourceID());
         Ok((Object::Texture(t), [id, 0, 0, 0, 0, 0]))
     }
@@ -2090,7 +2109,7 @@ impl Executor {
     ) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(c.handle)?;
         let d = c.desc;
-        let fmt = metal::format_info(d.pixel_format).ok_or(Error::BadValue)?;
+        let fmt = metal::format_info(d.pixel_format).ok_or_else(|| bad!())?;
         let surface = match lock(&self.surfaces).get(&c.surface).cloned() {
             Some(s) => s,
             // A texture outlives the guest's hold on its surface: the guest lets go of the
@@ -2117,7 +2136,7 @@ impl Executor {
         let t = self
             .device
             .newTextureWithDescriptor_iosurface_plane(&desc, &surface.0, 0)
-            .ok_or(Error::BadValue)?;
+            .ok_or_else(|| bad!())?;
         log::debug!(
             "surface: texture {} over resource {} is IOSurface {} ({}x{} of {}x{})",
             c.handle,
@@ -2181,7 +2200,7 @@ impl Executor {
                 parent.newTextureViewWithPixelFormat_textureType_levels_slices(fmt, ty, levels, sl)
             }
         }
-        .ok_or(Error::BadValue)?;
+        .ok_or_else(|| bad!())?;
         let id = resource_id(v.gpuResourceID());
         Ok((Object::Texture(v), [id, 0, 0, 0, 0, 0]))
     }
@@ -2225,7 +2244,7 @@ impl Executor {
         let st = self
             .device
             .newSamplerStateWithDescriptor(&d)
-            .ok_or(Error::BadValue)?;
+            .ok_or_else(|| bad!())?;
         let id = resource_id(st.gpuResourceID());
         Ok((Object::Sampler(st), [id, 0, 0, 0, 0, 0]))
     }
@@ -2421,7 +2440,7 @@ impl Executor {
         let s = self
             .device
             .newDepthStencilStateWithDescriptor(&d)
-            .ok_or(Error::BadValue)?;
+            .ok_or_else(|| bad!())?;
         Ok((Object::DepthStencil(s), [0; 6]))
     }
 
@@ -2491,7 +2510,7 @@ impl Executor {
                 };
                 Object::SharedEvent(e, mirror)
             }
-            _ => return Err(Error::BadValue),
+            _ => return Err(bad!()),
         };
         Ok((o, [0; 6]))
     }
@@ -2499,9 +2518,9 @@ impl Executor {
     fn texture_transfer(&self, c: &cmd::TextureTransfer) -> R {
         let t = self.texture(c.texture)?;
         check_region(t, c.level, c.slice, c.origin, c.size)?;
-        let fmt = metal::format_info(t.pixelFormat().0 as u32).ok_or(Error::BadValue)?;
-        let len = linear_extent(fmt, c.size, c.bytes_per_row, c.bytes_per_image)
-            .ok_or(Error::BadValue)?;
+        let fmt = metal::format_info(t.pixelFormat().0 as u32).ok_or_else(|| bad!())?;
+        let len =
+            linear_extent(fmt, c.size, c.bytes_per_row, c.bytes_per_image).ok_or_else(|| bad!())?;
         let (_a, p) = self.host(c.data, len, 1)?;
         let region = MTLRegion {
             origin: origin3(c.origin),
@@ -2706,7 +2725,7 @@ impl Executor {
         let enc = self
             .open_cb()?
             .renderCommandEncoderWithDescriptor(&desc)
-            .ok_or(Error::BadValue)?;
+            .ok_or_else(|| bad!())?;
         self.enc = Encoder::Render { enc, visibility };
         Ok(())
     }
@@ -2773,7 +2792,7 @@ impl Executor {
                 check(s.a <= 5)?;
                 enc.setStencilStoreAction(MTLStoreAction(s.a as usize));
             }
-            _ => return Err(Error::BadValue),
+            _ => return Err(bad!()),
         }
         Ok(())
     }
@@ -2782,13 +2801,18 @@ impl Executor {
         let t = self.texture(c.texture)?;
         check_region(t, c.level, c.slice, c.origin, c.size)?;
         check(c.options <= 2)?;
-        let fmt =
-            metal::copy_format_info(t.pixelFormat().0 as u32, c.options).ok_or(Error::BadValue)?;
-        let len = linear_extent(fmt, c.size, c.bytes_per_row, c.bytes_per_image)
-            .ok_or(Error::BadValue)?;
+        let format = t.pixelFormat().0 as u32;
+        let (fmt, options) = metal::copy_format_info(format, c.options).ok_or_else(|| {
+            bad!(
+                "no copy layout for format {format} with options {}",
+                c.options
+            )
+        })?;
+        let len =
+            linear_extent(fmt, c.size, c.bytes_per_row, c.bytes_per_image).ok_or_else(|| bad!())?;
         let buf = self.range(c.buffer, len)?;
         let enc = self.compute()?;
-        let opts = MTLBlitOption(c.options as usize);
+        let opts = MTLBlitOption(options as usize);
         // SAFETY: the texture region lies inside the level and the buffer range inside the arena,
         // both checked above.
         unsafe {
