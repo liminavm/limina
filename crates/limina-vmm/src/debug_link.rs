@@ -5,7 +5,8 @@
 //!
 //! The supervisor owns the user-facing socket (`limina debug`, the Debug menu) and forwards what
 //! is meant for the worker over a link (`--debug-control-fd`), in the same line protocol
-//! (`limina_debug::wire`). Only `log` and `status` mean anything here; the worker's diagnostic
+//! (`limina_debug::wire`). Only `log` and `status` mean anything here (a status also carries the
+//! GPU host's stats, when there is one); the worker's diagnostic
 //! levers live inside libkrun and are not switchable yet.
 //!
 //! A replacement worker (a guest reboot, a resume) starts from the filter the supervisor last
@@ -53,11 +54,14 @@ fn serve(stream: UnixStream) {
 /// Everything written back for one request line, terminator included.
 fn answer(line: &str) -> String {
     match Request::parse(line) {
-        Ok(Request::Status) => format!(
-            "log worker {}\n{}\n",
-            limina_debug::logger::filter_spec(),
-            wire::OK
-        ),
+        Ok(Request::Status) => {
+            let mut lines = format!("log worker {}\n", limina_debug::logger::filter_spec());
+            if let Some(gpu) = crate::krun::metal_ext::status_line() {
+                lines += &gpu;
+                lines += "\n";
+            }
+            lines + wire::OK + "\n"
+        }
         Ok(Request::Log { spec, .. }) => match limina_debug::logger::set_filter(&spec) {
             Ok(()) => {
                 // At warn, so the change is on record under the filter it just replaced as well

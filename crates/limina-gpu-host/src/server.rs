@@ -3,9 +3,10 @@
 
 use std::collections::HashMap;
 use std::ptr::NonNull;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use limina_gpu_wire::ring::{self, Consumer};
 use objc2::rc::{Retained, autoreleasepool};
@@ -54,7 +55,19 @@ struct Server {
     placeholders: Vec<Arena>,
     /// Objects holding resource IDs below restored objects', until every context stands.
     id_placeholders: Placeholders,
+    /// The heap size and the non-arena footprint that next earn a warning.
+    next_heap_warn: u64,
+    next_other_warn: u64,
 }
+
+/// How often the GPU host logs what it holds, and checks it against the warnings below.
+const STATS_PERIOD: Duration = Duration::from_secs(300);
+/// The heap that earns the first warning, and every doubling after it. A healthy GPU host's heap
+/// is tens of MiB; one that leaked a frame's encoder each frame passed this in about an hour.
+const HEAP_WARN: u64 = 1 << 30;
+/// The same for the footprint beyond the arenas (textures over surfaces, Metal's own pools): a
+/// leak the heap's bound cannot see.
+const OTHER_WARN: u64 = 8 << 30;
 
 /// Metal places allocations on this boundary.
 const GRANULE: u64 = 0x8000;
@@ -111,13 +124,21 @@ fn serve() -> std::io::Result<()> {
         exports: HashMap::new(),
         placeholders: Vec::new(),
         id_placeholders: Placeholders::default(),
+        next_heap_warn: HEAP_WARN,
+        next_other_warn: OTHER_WARN,
     };
+    let mut next_stats = Instant::now() + STATS_PERIOD;
     loop {
-        let Some(msg) = service.receive(None)? else {
-            continue;
-        };
-        // Each request's autoreleased Metal objects, drained before the next (see `Executor::run`).
-        autoreleasepool(|_| server.handle(msg));
+        let wait = next_stats.saturating_duration_since(Instant::now());
+        if let Some(msg) = service.receive(Some(wait.as_millis().max(1) as u32))? {
+            // Each request's autoreleased Metal objects, drained before the next (see
+            // `Executor::run`).
+            autoreleasepool(|_| server.handle(msg));
+        }
+        if Instant::now() >= next_stats {
+            server.log_stats();
+            next_stats = Instant::now() + STATS_PERIOD;
+        }
     }
 }
 
@@ -245,6 +266,7 @@ impl Server {
                     ),
                 },
             },
+            ipc::STATS => (Message::new(0, self.stats().bytes()), vec![]),
             ipc::RESTORE_DONE => {
                 self.placeholders.clear();
                 self.id_placeholders = Placeholders::default();
@@ -284,6 +306,58 @@ impl Server {
         if let Err(e) = mach::reply(reply_to, &reply, &ports) {
             log::warn!("reply to {:#x}: {e}", msg.id);
         }
+    }
+
+    fn stats(&self) -> ipc::Stats {
+        let mut st = ipc::Stats {
+            footprint: footprint(),
+            heap: heap_in_use(),
+            contexts: self.contexts.len() as u32,
+            exports: self.exports.len() as u32,
+            ..Default::default()
+        };
+        // An exported arena is also its context's until either lets go: count it once.
+        let mut arenas: HashMap<*const Arena, u64> = HashMap::new();
+        for c in self.contexts.values() {
+            st.rings += c.ring.is_some() as u32;
+            st.surfaces += lock(&c.surfaces).len() as u32;
+            st.objects += c.mailbox.objects.load(Ordering::Relaxed);
+            st.buried += c.mailbox.buried.load(Ordering::Relaxed);
+            for a in lock(&c.arenas).values() {
+                arenas.insert(Arc::as_ptr(a), a.size);
+            }
+        }
+        for a in self.exports.values() {
+            arenas.insert(Arc::as_ptr(a), a.size);
+        }
+        for a in &self.placeholders {
+            arenas.insert(a, a.size);
+        }
+        st.arenas = arenas.len() as u32;
+        st.arena_bytes = arenas.values().sum();
+        st
+    }
+
+    /// Logs what the GPU host holds, at `warn` when its heap or its footprint beyond the arenas
+    /// passes the next threshold, so a default-filtered log still shows a leak's first day.
+    fn log_stats(&mut self) {
+        let st = self.stats();
+        let other = st.footprint.saturating_sub(st.arena_bytes);
+        let mut crossed = false;
+        while st.heap >= self.next_heap_warn {
+            self.next_heap_warn *= 2;
+            crossed = true;
+        }
+        while other >= self.next_other_warn {
+            self.next_other_warn *= 2;
+            crossed = true;
+        }
+        let level = if crossed {
+            log::Level::Warn
+        } else {
+            log::Level::Info
+        };
+        log::log!(level, "{}", describe(&st));
     }
 
     fn create_context(&mut self, ctx: u32) -> Result<u32, i32> {
@@ -632,6 +706,48 @@ impl Server {
             Err(_) => ipc::ERR_INTERNAL,
         }
     }
+}
+
+/// One line for the log and for `limina debug`.
+pub fn describe(st: &ipc::Stats) -> String {
+    const MIB: u64 = 1 << 20;
+    format!(
+        "gpu-host: footprint {} MiB, heap {} MiB, arenas {} ({} MiB), contexts {} ({} with a \
+         ring), exports {}, surfaces {}, objects {}, buried {}",
+        st.footprint / MIB,
+        st.heap / MIB,
+        st.arenas,
+        st.arena_bytes / MIB,
+        st.contexts,
+        st.rings,
+        st.exports,
+        st.surfaces,
+        st.objects,
+        st.buried
+    )
+}
+
+/// This process's `phys_footprint`: what macOS bills it, Activity Monitor's "Memory".
+fn footprint() -> u64 {
+    // SAFETY: zeroed POD that proc_pid_rusage fills; the buffer argument is `rusage_info_t`, a
+    // pointer to the struct.
+    let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::proc_pid_rusage(
+            libc::getpid(),
+            libc::RUSAGE_INFO_V2,
+            (&raw mut info).cast::<libc::rusage_info_t>(),
+        )
+    };
+    if rc == 0 { info.ri_phys_footprint } else { 0 }
+}
+
+/// Bytes malloc has handed out and not had back, over every zone.
+fn heap_in_use() -> u64 {
+    // SAFETY: zeroed POD; a null zone asks for every zone's statistics, summed into `st`.
+    let mut st: libc::malloc_statistics_t = unsafe { std::mem::zeroed() };
+    unsafe { libc::malloc_zone_statistics(std::ptr::null_mut(), &mut st) };
+    st.size_in_use as u64
 }
 
 /// Exits when the parent (the worker) does, so a GPU host never outlives its VM.

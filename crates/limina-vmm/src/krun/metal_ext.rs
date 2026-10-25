@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 use std::time::Duration;
 
 use devices::virtio::gpu::ext::{ExtArena, GpuExtension, Signal};
@@ -23,6 +23,19 @@ const ENABLE_ENV: &str = "LIMINA_GPU_METAL";
 /// Guest-physical space for arenas. Arenas are placed in it on demand; nothing is allocated up
 /// front.
 pub const ARENA_WINDOW: usize = 16 << 30;
+
+/// The extension [`start`] made, for [`status_line`]; the device owns it.
+static LIVE: Mutex<Weak<GpuHostExtension>> = Mutex::new(Weak::new());
+
+/// What the GPU host holds and what it costs, as `limina debug <vm> status` shows it; `None`
+/// without one.
+pub fn status_line() -> Option<String> {
+    let ext = LIVE.lock().unwrap_or_else(|e| e.into_inner()).upgrade()?;
+    Some(match ext.host.stats() {
+        Ok(st) => limina_gpu_host::server::describe(&st),
+        Err(e) => format!("gpu-host: no stats: {e}"),
+    })
+}
 
 struct GpuHostExtension {
     host: GpuHost,
@@ -501,7 +514,7 @@ pub fn start(enabled: bool) -> Option<Arc<dyn GpuExtension>> {
                 log::warn!("metal ext: fence watch did not start: {e}");
                 return None;
             }
-            Some(Arc::new(GpuHostExtension {
+            let ext = Arc::new(GpuHostExtension {
                 fences,
                 host,
                 doorbells: RwLock::new(Vec::new()),
@@ -509,7 +522,9 @@ pub fn start(enabled: bool) -> Option<Arc<dyn GpuExtension>> {
                 arenas: Mutex::new(HashMap::new()),
                 exports: Mutex::new(HashMap::new()),
                 holding_orphans: Mutex::new(false),
-            }))
+            });
+            *LIVE.lock().unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(&ext);
+            Some(ext)
         }
         Err(e) => {
             log::warn!("metal ext: GPU host {} did not start: {e}", exe.display());

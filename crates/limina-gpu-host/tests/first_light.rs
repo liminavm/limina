@@ -2737,11 +2737,11 @@ fn triangle_frame(g: &mut Guest) {
     g.commit_and_wait().expect("frame");
 }
 
-#[test]
-fn drawing_frames_does_not_grow_the_gpu_host() {
-    let mut g = start();
+/// What [`triangle_frame`] draws with: library 1, render pipeline 2, render target 3 and
+/// argument table 4.
+fn triangle_setup(g: &mut Guest) {
     g.write(MIB, &[0; 48]);
-    create_library(&mut g, 1, MSL, BufRef::NONE);
+    create_library(g, 1, MSL, BufRef::NONE);
     let mut colors = [0u32; cmd::MAX_COLOR_ATTACHMENTS];
     colors[0] = RGBA8_UNORM;
     g.push(
@@ -2780,7 +2780,13 @@ fn drawing_frames_does_not_grow_the_gpu_host() {
         &[],
     );
     let base = g.arena.gpu_base;
-    table(&mut g, 4, &[(0, base + MIB)]);
+    table(g, 4, &[(0, base + MIB)]);
+}
+
+#[test]
+fn drawing_frames_does_not_grow_the_gpu_host() {
+    let mut g = start();
+    triangle_setup(&mut g);
 
     // Warm up: Metal's caches and pools fill over the first frames.
     for _ in 0..500 {
@@ -2806,5 +2812,46 @@ fn drawing_frames_does_not_grow_the_gpu_host() {
         grew < 256 << 10,
         "the GPU host grew {} KiB over {FRAMES} frames",
         grew >> 10
+    );
+}
+
+#[test]
+fn stats_count_what_the_gpu_host_holds() {
+    let mut g = start();
+    triangle_setup(&mut g);
+    g.commit_and_wait().expect("setup");
+    let st = g.host.stats().expect("stats");
+    assert_eq!(
+        (st.status, st.contexts, st.rings, st.arenas, st.exports),
+        (0, 1, 1, 1, 0),
+        "{st:?}"
+    );
+    assert_eq!(st.arena_bytes, g.arena.mapping.size(), "{st:?}");
+    assert_eq!((st.objects, st.buried), (4, 0), "{st:?}");
+    assert!(st.heap > 0 && st.footprint > st.heap, "{st:?}");
+
+    // A destroyed object waits for the commit after its destroy before it is let go.
+    g.push(cmd::Destroy { handle: 3, _pad: 0 }, &[]);
+    g.kick();
+    wait_until("the destroy is counted", || {
+        let st = g.host.stats().unwrap();
+        (st.objects, st.buried) == (3, 1)
+    });
+    g.commit_and_wait().expect("commit");
+    wait_until("the grave is reaped", || {
+        g.host.stats().unwrap().buried == 0
+    });
+
+    let other = g.host.create_arena(1, 2, MIB).expect("second arena");
+    g.host.export_arena(1, 2, 7).expect("export");
+    let st = g.host.stats().expect("stats");
+    assert_eq!(
+        (st.arenas, st.exports),
+        (2, 1),
+        "an export is its context's arena too"
+    );
+    assert_eq!(
+        st.arena_bytes,
+        g.arena.mapping.size() + other.mapping.size()
     );
 }

@@ -42,6 +42,9 @@ pub const RESTORE_DONE: i32 = 0x4c47_000d;
 /// the exported position with its objects rebuilt, after its arenas are restored. A context that
 /// cannot be rebuilt starts lost; the request still succeeds.
 pub const RESTORE_CONTEXT: i32 = 0x4c47_000e;
+/// `{}` → [`Stats`]: what the GPU host holds and what it costs, for `limina debug` and its own
+/// periodic log line.
+pub const STATS: i32 = 0x4c47_000f;
 
 /// Request statuses.
 pub const OK: i32 = 0;
@@ -175,6 +178,31 @@ pub struct SurfaceRequest {
     pub surface: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Stats {
+    pub status: i32,
+    pub _pad: u32,
+    /// The process's `phys_footprint`, Activity Monitor's "Memory".
+    pub footprint: u64,
+    /// Bytes allocated from malloc and not freed.
+    pub heap: u64,
+    /// Bytes of every arena alive, whether a context or an export holds it.
+    pub arena_bytes: u64,
+    pub contexts: u32,
+    /// Contexts with a ring thread.
+    pub rings: u32,
+    /// Arenas alive, counted once whether a context or an export holds them.
+    pub arenas: u32,
+    pub exports: u32,
+    pub surfaces: u32,
+    /// Host objects the guest's handles name, over every context.
+    pub objects: u32,
+    /// Objects destroyed and waiting for the GPU to finish with them.
+    pub buried: u32,
+    pub _pad2: u32,
+}
+
 // SAFETY: all of these are repr(C) integers with explicit padding.
 unsafe impl Pod for CtxRequest {}
 unsafe impl Pod for Status {}
@@ -189,3 +217,4 @@ unsafe impl Pod for SurfaceRequest {}
 unsafe impl Pod for ExportReply {}
 unsafe impl Pod for RestoreArena {}
 unsafe impl Pod for RestoreContext {}
+unsafe impl Pod for Stats {}

@@ -14,7 +14,7 @@ mod battery;
 mod console;
 mod display_update;
 mod lease;
-mod metal_ext;
+pub(crate) mod metal_ext;
 mod netd;
 mod switch;
 mod uplink;

@@ -240,13 +240,11 @@ fn status() -> Vec<String> {
         "log supervisor {}",
         limina_debug::logger::filter_spec()
     )];
-    lines.push(match ask_worker(&Request::Status) {
-        Ok(reply) => reply
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| "log worker ?".into()),
-        Err(why) => format!("log worker ? ({why})"),
-    });
+    match ask_worker(&Request::Status) {
+        Ok(reply) if !reply.is_empty() => lines.extend(reply),
+        Ok(_) => lines.push("log worker ?".into()),
+        Err(why) => lines.push(format!("log worker ? ({why})")),
+    }
     for l in LEVERS {
         lines.push(format!(
             "lever {} {} {} {}",

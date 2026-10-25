@@ -86,10 +86,15 @@ const MAX_WINDOW_BYTES: usize = 64 << 20;
 /// The most command buffers a context may end before committing them, by the same reasoning.
 const MAX_ENDED: usize = 4096;
 
-/// Requests the server makes of a context's ring thread, answered when the ring is idle.
+/// Requests the server makes of a context's ring thread, answered when the ring is idle, and the
+/// counts the ring thread keeps for [`crate::ipc::Stats`].
 #[derive(Default)]
 pub struct Mailbox {
     pub export: Mutex<Option<std::sync::mpsc::Sender<ContextExport>>>,
+    /// Host objects the guest's handles name.
+    pub objects: AtomicU32,
+    /// Destroyed objects waiting in the graveyard.
+    pub buried: AtomicU32,
 }
 /// The surfaces the worker filed for a context, by the guest resource that names each.
 pub type Surfaces = Arc<Mutex<HashMap<u32, metal::Surface>>>;
@@ -954,6 +959,9 @@ impl Executor {
                         );
                         self.lose(e, n.at);
                     }
+                    self.mailbox
+                        .objects
+                        .store(self.objects.map.len() as u32, Ordering::Relaxed);
                 }
                 Ok(None) => {
                     autoreleasepool(|_| {
@@ -1063,6 +1071,9 @@ impl Executor {
 
     /// Holds `grave` until every commit submitted so far, and the next one, has completed.
     fn bury(&mut self, grave: Grave) {
+        self.mailbox
+            .buried
+            .fetch_add(grave.0.len() as u32, Ordering::Relaxed);
         self.graveyard.push((self.commits + 1, grave));
     }
 
@@ -1077,6 +1088,10 @@ impl Executor {
             .into_iter()
             .partition(|(tag, _)| commits >= *tag && oldest > *tag);
         self.graveyard = kept;
+        let freed: usize = done.iter().map(|(_, g)| g.0.len()).sum();
+        self.mailbox
+            .buried
+            .fetch_sub(freed as u32, Ordering::Relaxed);
         // A surface's texture was made resident on its own; it leaves the set with it.
         let mut changed = false;
         for (_, grave) in &done {

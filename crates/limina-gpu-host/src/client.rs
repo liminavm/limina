@@ -316,6 +316,12 @@ impl GpuHost {
         self.simple("restore done", ipc::RESTORE_DONE, &[])
     }
 
+    /// What the GPU host holds and what it costs.
+    pub fn stats(&self) -> io::Result<ipc::Stats> {
+        let r = self.call(ipc::STATS, &[])?;
+        ipc::Stats::read(&r.data).ok_or_else(|| io::Error::other("short reply"))
+    }
+
     pub fn destroy_arena(&self, ctx: u32, arena: u32) -> io::Result<()> {
         self.simple(
             "arena destroy",
