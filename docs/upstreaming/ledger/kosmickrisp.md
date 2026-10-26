@@ -1,8 +1,8 @@
 <!-- ledger-check: dep=kosmickrisp -->
 # kosmickrisp — patch-audit ledger
 
-135 commits; base `d44453ce07b` (mesa main, rebased 2026-10-14 by limina `b9be1f0`), pin
-`3d7a8fe4244` (`third_party/manifest.toml` [kosmickrisp]); see *Rebase executed* below.
+136 commits; base `d44453ce07b` (mesa main, rebased 2026-10-14 by limina `b9be1f0`), pin
+`c40298fd0cc` (`third_party/manifest.toml` [kosmickrisp]); see *Rebase executed* below.
 Schema + protocol: `README.md`. The `checked` column of rows 0001–0019 records main `84acd848`
 (2026-08-03), which is two bases old (`418f2963a15` on 2026-08-05, then `d44453ce07b` on
 2026-10-14); those `need` verdicts have not been re-verified against the current base.
@@ -359,3 +359,15 @@ name; an upstream shape would be a Vulkan extension, or zink's own reset account
 | `161be8ef694` | zink: survive the descriptor pools a lost device cannot create | `src/gallium/drivers/zink/zink_descriptors.c`, `src/gallium/drivers/zink/zink_draw.cpp` |  | upstream-after-cleanup; sec: guest-DoS |
 | `909b3baeae8` | kk: recover from a GPU-watchdog hang instead of losing the device | `src/kosmickrisp/vulkan/kk_cmd_pool.c`, `src/kosmickrisp/vulkan/kk_cmd_pool.h`, `src/kosmickrisp/vulkan/kk_device.c` +3 |  | carry (private entry point), recovery possibly upstream; sec: guest-DoS |
 | `3d7a8fe4244` | zink: reset the context whose work hung the GPU, not the device | `src/gallium/drivers/zink/zink_batch.c`, `src/gallium/drivers/zink/zink_context.c`, `src/gallium/drivers/zink/zink_screen.c` +1 |  | carry (needs the KK entry point; policy); sec: guest-DoS |
+
+### I. A bound on zink's buffer-view cache (`spikes/zink-tbo-churn/`)
+
+zink caches one VkBufferView per (format, offset, size) on a buffer's resource object and frees
+them only with the object, so a long-lived buffer bound as a texel buffer at ever-new ranges
+(Firefox's WebRender) grows the cache without bound. Upstream `main` at the base `d44453ce07b`
+has the same unbounded cache, and nothing in it is KK- or limina-specific. The same change is on
+the guest branch (`kosmickrisp-guest.md`); one MR would carry it.
+
+| commit | subject | files | diag | first guess (unresearched) |
+|---|---|---|---|---|
+| `c40298fd0cc` | zink: bound the buffer views a resource object caches | `src/gallium/drivers/zink/zink_batch.c`, `src/gallium/drivers/zink/zink_context.c`, `src/gallium/drivers/zink/zink_resource.c` +2 |  | upstream-after-cleanup (needs `tbo-churn` run on plain zink); sec: guest-DoS (a guest's GL grows host zink's views on the vrend tier) |
