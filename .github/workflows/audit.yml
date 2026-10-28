@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+# Copyright © 2026 Marcelo Jorge Vieira
+
+name: Dependency audit
+
+on:
+  pull_request:
+    paths:
+      - "**/Cargo.lock"
+      - .cargo/audit.toml
+      - .github/workflows/audit.yml
+  push:
+    branches:
+      - main
+    paths:
+      - "**/Cargo.lock"
+      - .cargo/audit.toml
+      - .github/workflows/audit.yml
+  # An advisory can land against a lockfile nobody has touched.
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: RustSec advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install cargo-audit
+        env:
+          VERSION: 0.22.2
+          SHA256: ab28a1bdb54db4d5d8ad5981cf1f959410370b3d28250dbd35f6a44248620e39
+        run: |
+          name="cargo-audit-x86_64-unknown-linux-gnu-v${VERSION}"
+          curl --proto '=https' --tlsv1.2 -sSfL -o "$RUNNER_TEMP/$name.tgz" \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${VERSION}/$name.tgz"
+          echo "$SHA256  $RUNNER_TEMP/$name.tgz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$name.tgz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
+
+      # The spikes' lockfiles are experiments, neither shipped nor tooling, and stay out.
+      - name: Audit the lockfiles
+        run: |
+          failed=""
+          for lock in Cargo.lock guest/Cargo.lock xtask/Cargo.lock testcomp/Cargo.lock fuzz/Cargo.lock; do
+            echo "::group::$lock"
+            cargo-audit audit --file "$lock" || failed="$failed $lock"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::advisories found in:$failed"
+            exit 1
+          fi

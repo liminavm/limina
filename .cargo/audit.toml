@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+# Copyright © 2026 Marcelo Jorge Vieira
+
+# Read by `cargo audit` run from the repository root (.github/workflows/audit.yml). Each ignored
+# advisory says why it does not apply here; drop it once that stops being true.
+[advisories]
+ignore = [
+    # rsa, under janus: the Marvin timing attack has no fixed release, and docs/design/vtpm.md
+    # accepts it.
+    "RUSTSEC-2023-0071",
+    # zstd, zstd-safe and zstd-sys, under libkrun: its one call decodes a zstd kernel image inside
+    # `cfg(target_arch = "x86_64")` (src/libkrun/src/vmm/builder.rs), and limina is arm64 only.
+    "RUSTSEC-2026-0391",
+    "RUSTSEC-2026-0398",
+    "RUSTSEC-2026-0403",
+    "RUSTSEC-2026-0410",
+]
