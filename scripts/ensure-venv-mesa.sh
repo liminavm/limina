@@ -30,7 +30,7 @@ if [ -d "$VENV_MESA" ]; then
   VENV_MESA="$(cd "$VENV_MESA" && pwd -P)"
 fi
 
-# Module name (what the build imports) paired with the distribution that provides it.
+# The modules the build imports; scripts/venv-mesa-requirements.txt pins what provides them.
 # mako:      Mesa's and venus-protocol's template engine.
 # yaml:      gallium's u_format.yaml parser.
 # packaging: Mesa's meson.build needs packaging or distutils, and distutils was removed in
@@ -38,7 +38,9 @@ fi
 #            here and not only in Mesa's own docs because this venv goes on PATH *ahead of*
 #            the system Python, so whatever Mesa needs has to be in it, not merely on the host.
 _venv_mesa_modules=(mako yaml packaging)
-_venv_mesa_packages=(mako pyyaml packaging)
+# The copy kept inside the venv says which pins it holds.
+_venv_mesa_requirements="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/venv-mesa-requirements.txt"
+_venv_mesa_installed="$VENV_MESA/limina-requirements.txt"
 
 if [ ! -x "$VENV_MESA/bin/python3" ]; then
   echo "==> creating $VENV_MESA"
@@ -47,15 +49,18 @@ fi
 
 # Check the modules, not just the directory: a venv from an older prerequisite set is the
 # case that otherwise reappears as the same build-script traceback.
-_venv_mesa_missing=()
-for _i in "${!_venv_mesa_modules[@]}"; do
-  "$VENV_MESA/bin/python3" -c "import ${_venv_mesa_modules[$_i]}" 2>/dev/null \
-    || _venv_mesa_missing+=("${_venv_mesa_packages[$_i]}")
+_venv_mesa_why=""
+cmp -s "$_venv_mesa_requirements" "$_venv_mesa_installed" || _venv_mesa_why="not at the pins"
+for _m in "${_venv_mesa_modules[@]}"; do
+  [ -z "$_venv_mesa_why" ] || break
+  "$VENV_MESA/bin/python3" -c "import $_m" 2>/dev/null || _venv_mesa_why="no $_m"
 done
-if [ "${#_venv_mesa_missing[@]}" -gt 0 ]; then
-  echo "==> installing into venv-mesa: ${_venv_mesa_missing[*]}"
-  "$VENV_MESA/bin/pip" install --quiet --disable-pip-version-check "${_venv_mesa_missing[@]}"
+if [ -n "$_venv_mesa_why" ]; then
+  echo "==> installing the pinned modules into venv-mesa ($_venv_mesa_why)"
+  "$VENV_MESA/bin/pip" install --quiet --disable-pip-version-check --require-hashes \
+    -r "$_venv_mesa_requirements"
+  cp "$_venv_mesa_requirements" "$_venv_mesa_installed"
 fi
-unset _venv_mesa_modules _venv_mesa_packages _venv_mesa_missing _i
+unset _venv_mesa_modules _venv_mesa_requirements _venv_mesa_installed _venv_mesa_why _m
 
 export PATH="$VENV_MESA/bin:$PATH"
