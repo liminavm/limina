@@ -10,7 +10,10 @@
 # Usage: scripts/build-virtio-gpu-limina.sh [KTAG] [KREL]
 #   KTAG: stable kernel tag whose virtio-gpu sources to vendor (default v6.19.10, the F44 stock
 #         kernel; see docs/images.md), or `limina:<rev>` for the [linux] fork at <rev>, whose
-#         virtio-gpu carries our own commits on top of its stable base.
+#         virtio-gpu carries our own commits on top of its stable base. A stable tag's files are
+#         checked against guest/virtio-gpu-limina/sources/<KTAG>.sha256, and a tag without one
+#         is refused: record its sums from a second copy of the tag (a git checkout, say), not
+#         from the download they are meant to check.
 #   KREL: when given, also build the module against that Fedora kernel-devel release
 #         (e.g. 6.19.10-300.fc44.aarch64) and leave it at target/virtio-gpu-limina/<KREL>/.
 # Output: target/virtio-gpu-limina/limina-virtio-gpu-ext-<version>/ (the DKMS tree) and its
@@ -42,6 +45,15 @@ SRC="guest/virtio-gpu-limina"
 OUT="target/virtio-gpu-limina"
 TREE="$OUT/$NAME-$VERSION"
 
+SUMS=""
+case "$KTAG" in
+  limina:*) ;;
+  *)
+    SUMS="$PWD/$SRC/sources/$KTAG.sha256"
+    [ -f "$SUMS" ] || { echo "no checksums for $KTAG: $SRC/sources/$KTAG.sha256 is missing" >&2; exit 1; }
+    ;;
+esac
+
 # The full in-tree source set; keep in sync with $SRC/Kbuild.
 FILES=(
     virtgpu_drv.c virtgpu_drv.h virtgpu_kms.c virtgpu_gem.c virtgpu_vram.c
@@ -60,6 +72,11 @@ for f in "${FILES[@]}"; do
     # cgit serves an HTML error page for unknown refs; make sure we got C source.
     head -c 100 "$TREE/$f" | grep -q "<html" && { echo "bad fetch: $f ($KTAG)" >&2; exit 1; }
 done
+if [ -n "$SUMS" ] && ! sums_out="$(cd "$TREE" && shasum -a 256 -c "$SUMS" 2>&1)"; then
+    printf '%s\n' "$sums_out" | grep -v ': OK$' >&2
+    echo "the $KTAG sources do not match $SRC/sources/$KTAG.sha256" >&2
+    exit 1
+fi
 
 # Upstream fixes a vendored series predates, each applied only where its source still lacks it.
 # d1b894c5bbb3 (7.1): the display-info callback raised the hotplug from the control queue's
