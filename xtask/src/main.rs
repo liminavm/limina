@@ -480,6 +480,7 @@ fn vendor_fork(root: &Path, manifest: &Manifest, name: &str, main: Option<&Path>
         .map(|m| m.join("third_party").join(name))
         .and_then(|p| p.canonicalize().ok())
         .filter(|p| git::is_tree(p));
+    let mut cloned = false;
     if !git::is_tree(&dir) {
         if let Some(main_clone) = &main_clone {
             if !git::has_commit(main_clone, &rev) {
@@ -506,6 +507,7 @@ fn vendor_fork(root: &Path, manifest: &Manifest, name: &str, main: Option<&Path>
             }
             c.args([&from, dir_s]);
             run(&mut c)?;
+            cloned = true;
             if dep.source.is_some() {
                 git::run(&dir, &["remote", "set-url", "origin", &repo_url])?;
                 git::run(&dir, &["remote", "add", "local", &from])?;
@@ -542,7 +544,9 @@ fn vendor_fork(root: &Path, manifest: &Manifest, name: &str, main: Option<&Path>
         return Ok(());
     }
 
-    if git::is_ancestor(&dir, &rev, &branch) {
+    // A clone made just now stands at the branch's remote tip, which may be past the pin: only a
+    // tree that was already here can hold local work on top of the pin.
+    if !cloned && git::is_ancestor(&dir, &rev, &branch) {
         git::run(&dir, &["checkout", &branch])?;
     } else {
         eprintln!("==> {name}: moving {branch} to the pinned rev {rev}");
@@ -933,4 +937,52 @@ fn info_plist(capture: &Path) -> String {
 </plist>
 "#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git_in(dir: &Path, args: &[&str]) -> String {
+        let identity = [
+            "-c",
+            "user.name=xtask",
+            "-c",
+            "user.email=xtask@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+        ];
+        git::out(dir, &[&identity[..], args].concat()).unwrap()
+    }
+
+    #[test]
+    fn a_fresh_clone_is_left_at_the_pin_and_not_at_the_branch_tip() {
+        let base = std::env::temp_dir().join(format!("xtask-vendor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let fork = base.join("fork");
+        std::fs::create_dir_all(&fork).unwrap();
+        git_in(&fork, &["init", "--quiet", "--initial-branch=limina"]);
+        git_in(&fork, &["commit", "--quiet", "--allow-empty", "-m", "pin"]);
+        let pin = git_in(&fork, &["rev-parse", "HEAD"]);
+        git_in(
+            &fork,
+            &["commit", "--quiet", "--allow-empty", "-m", "past the pin"],
+        );
+
+        let root = base.join("limina");
+        std::fs::create_dir_all(root.join("third_party")).unwrap();
+        let committed = format!(
+            "[dep]\nrepo = \"{}\"\nbranch = \"limina\"\nrev = \"{pin}\"\n",
+            fork.display()
+        );
+        let manifest = Manifest::parse(&root, &committed, "test", None).unwrap();
+        vendor_fork(&root, &manifest, "dep", None).unwrap();
+
+        let head = git::out(&root.join("third_party/dep"), &["rev-parse", "HEAD"]).unwrap();
+        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(
+            head, pin,
+            "the clone builds the branch tip instead of the pin"
+        );
+    }
 }
