@@ -1,8 +1,8 @@
 <!-- ledger-check: dep=kosmickrisp -->
 # kosmickrisp — patch-audit ledger
 
-136 commits; base `d44453ce07b` (mesa main, rebased 2026-10-14 by limina `b9be1f0`), pin
-`c40298fd0cc` (`third_party/manifest.toml` [kosmickrisp]); see *Rebase executed* below.
+138 commits; base `d44453ce07b` (mesa main, rebased 2026-10-14 by limina `b9be1f0`), pin
+`c7a121f62c7` (`third_party/manifest.toml` [kosmickrisp]); see *Rebase executed* below.
 Schema + protocol: `README.md`. The `checked` column of rows 0001–0019 records main `84acd848`
 (2026-08-03), which is two bases old (`418f2963a15` on 2026-08-05, then `d44453ce07b` on
 2026-10-14); those `need` verdicts have not been re-verified against the current base.
@@ -298,6 +298,8 @@ covered by the combined allocator-ceiling row and has no skeleton row.
 | commit | subject | files | diag | first guess (unresearched) |
 |---|---|---|---|---|
 | `352da85cb39` | zink: don't recurse forever populating a shadow attachment | `src/gallium/drivers/zink/zink_render_pass.c` |  | upstream-now (queued in the guest mesa series); sec: guest-DoS |
+| `e83dfa18615` | zink: populate shadow attachments before reducing the fb to flush clears | `src/gallium/drivers/zink/zink_context.c` |  | upstream-now (second of the three on `kov/mesa` `zink-msrtt-shadow`); sec: no |
+| `c7a121f62c7` | zink: keep every transient a shadow call populated valid | `src/gallium/drivers/zink/zink_render_pass.c` |  | upstream-now (third of the three on `kov/mesa` `zink-msrtt-shadow`); sec: no |
 | `6aa1f4a2105` | zink: fix the data races on the cross-thread batch/fence state | `src/gallium/drivers/zink/zink_batch.c`, `src/gallium/drivers/zink/zink_bo.h`, `src/gallium/drivers/zink/zink_clear.c` +9 |  | upstream-now (rebased on MR 45147); sec: data race |
 | `25530d9a082` | zink: make attachment writes shader-readable when a pass ends | `src/gallium/drivers/zink/zink_context.c` |  | upstream-after-cleanup; sec: no |
 | `f782fdb9814` | kk: default residual untyped values in msl type inference | `src/kosmickrisp/compiler/msl_type_inference.c` |  | upstream-after-cleanup; sec: no |
