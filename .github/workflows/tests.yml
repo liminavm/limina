@@ -88,3 +88,7 @@ jobs:
           -p limina-proto
           -p limina-surfaceport
           -p limina-usbip
+
+      # Standalone, outside the workspace, so the passes above never reach it.
+      - name: Run xtask tests
+        run: cargo test --locked --manifest-path xtask/Cargo.toml
