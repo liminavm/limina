@@ -321,10 +321,14 @@ mod tests {
     /// the events backend reads, byte for byte.
     #[test]
     fn the_interposed_socket_carries_events_through() {
-        let (sup, worker) = super::datagram_pair().unwrap();
+        // The router reads the blocking end, as it does the worker's end of the supervisor's
+        // socket; the non-blocking one would hand it EAGAIN whenever it got there first.
+        let (worker, sup) = super::datagram_pair().unwrap();
         let sink: HidReportSink = Arc::new(|_| {});
         let (backend_fd, active) = interpose(worker, sink).unwrap();
         active.store(true, Ordering::Release);
+        // Let the router reach its recv on an empty socket first: it must wait there.
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
         let ev = key(KEY_ENTER, 1);
         let bytes = ev.to_bytes();
@@ -348,10 +352,12 @@ mod tests {
     /// drained — the events become HID reports instead of piling up to be replayed later.
     #[test]
     fn the_router_drains_the_socket_into_hid_reports_while_virtio_is_inactive() {
-        let (sup, worker) = super::datagram_pair().unwrap();
+        let (worker, sup) = super::datagram_pair().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let sink: HidReportSink = Arc::new(move |r| tx.send(r).unwrap());
         let (_backend_fd, _active) = interpose(worker, sink).unwrap();
+        // Let the router reach its recv on an empty socket first: it must wait there.
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
         for ev in [key(KEY_H, 1), key(KEY_H, 0)] {
             let bytes = ev.to_bytes();
