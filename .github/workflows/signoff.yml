@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+# Copyright © 2026 Marcelo Jorge Vieira
+
+name: Sign-off
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signoff:
+    name: Every commit signed off
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # Every commit but only the head's files: the check reads nothing beyond commit messages.
+      - name: Check out the pull request's commits
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: tree:0
+          persist-credentials: false
+
+      - name: Check every commit for its author's sign-off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/check-signoff.sh "$BASE_SHA" "$HEAD_SHA"
