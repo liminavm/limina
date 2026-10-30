@@ -1,7 +1,7 @@
-From 63c03c7a69fbb6770c3c096df82119b1773c8274 Mon Sep 17 00:00:00 2001
+From 1c46fc8dd86dbd598b7584596ba7b963b02535b4 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Fri, 16 Oct 2026 16:58:58 -0300
-Subject: [PATCH 3/4] zink: populate shadow attachments before reducing the fb
+Subject: [PATCH 2/3] zink: populate shadow attachments before reducing the fb
  to flush clears
 
 When it is not blitting, zink_flush_clears() reduces ctx->fb_state to the
@@ -31,7 +31,7 @@ Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
  1 file changed, 15 insertions(+)
 
 diff --git a/src/gallium/drivers/zink/zink_context.c b/src/gallium/drivers/zink/zink_context.c
-index 205d1184985..7a2f42f98b5 100644
+index cfcfb495ea5..3d32db6e4ce 100644
 --- a/src/gallium/drivers/zink/zink_context.c
 +++ b/src/gallium/drivers/zink/zink_context.c
 @@ -3847,6 +3847,21 @@ zink_flush_clears(struct zink_context *ctx)

@@ -297,7 +297,7 @@ covered by the combined allocator-ceiling row and has no skeleton row.
 
 | commit | subject | files | diag | first guess (unresearched) |
 |---|---|---|---|---|
-| `352da85cb39` | zink: don't recurse forever populating a shadow attachment | `src/gallium/drivers/zink/zink_render_pass.c` |  | upstream-now (queued in the guest mesa series); sec: guest-DoS |
+| `352da85cb39` | zink: don't recurse forever populating a shadow attachment | `src/gallium/drivers/zink/zink_render_pass.c` |  | upstream-now (first of the three on `kov/mesa` `zink-msrtt-shadow`); sec: guest-DoS |
 | `e83dfa18615` | zink: populate shadow attachments before reducing the fb to flush clears | `src/gallium/drivers/zink/zink_context.c` |  | upstream-now (second of the three on `kov/mesa` `zink-msrtt-shadow`); sec: no |
 | `c7a121f62c7` | zink: keep every transient a shadow call populated valid | `src/gallium/drivers/zink/zink_render_pass.c` |  | upstream-now (third of the three on `kov/mesa` `zink-msrtt-shadow`); sec: no |
 | `6aa1f4a2105` | zink: fix the data races on the cross-thread batch/fence state | `src/gallium/drivers/zink/zink_batch.c`, `src/gallium/drivers/zink/zink_bo.h`, `src/gallium/drivers/zink/zink_clear.c` +9 |  | upstream-now (rebased on MR 45147); sec: data race |
