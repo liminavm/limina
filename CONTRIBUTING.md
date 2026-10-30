@@ -31,6 +31,10 @@ Each commit must carry a `Signed-off-by:` line with your real name and email add
 change or have the right to submit it, and that you submit it under the license indicated in
 the files you touch, which for limina is the license and exception described above.
 
+Every pull request runs `scripts/check-signoff.sh` over its commits, which refuses one whose
+sign-off is missing or does not carry the commit author's email. Run
+`scripts/check-signoff.sh origin/main` to check a branch before you push it.
+
 ## Record your copyright
 
 Add your own copyright line to the SPDX header of every file you create, and to files you
