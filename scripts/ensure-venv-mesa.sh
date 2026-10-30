@@ -57,7 +57,9 @@ for _m in "${_venv_mesa_modules[@]}"; do
 done
 if [ -n "$_venv_mesa_why" ]; then
   echo "==> installing the pinned modules into venv-mesa ($_venv_mesa_why)"
-  "$VENV_MESA/bin/pip" install --quiet --disable-pip-version-check --require-hashes \
+  # Through python3, not bin/pip: a venv's scripts carry the absolute path it was created at in
+  # their shebang, so a venv whose checkout was moved or renamed has a pip that cannot start.
+  "$VENV_MESA/bin/python3" -m pip install --quiet --disable-pip-version-check --require-hashes \
     -r "$_venv_mesa_requirements"
   cp "$_venv_mesa_requirements" "$_venv_mesa_installed"
 fi
