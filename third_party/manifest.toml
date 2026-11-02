@@ -28,8 +28,8 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "bc5425fe916122f734d0783456fff1d331dc6edd"
-base = "dc1a18ada58cb5d15db5333a12bf2f0cbf64ac15"
+rev = "b3195ea1cc1c4837130774e206de3fd4eaafb343"
+base = "a0375321bb1e6e51312e022af53e9e7668d3a07e"
 
 # Cardea: the guest's UEFI firmware, ours outright (Rust, MIT), docs/design/firmware-and-acpi.md.
 # Vendored like any tree; scripts/build-firmware.sh builds it natively into target/firmware/.
@@ -42,8 +42,8 @@ rev = "5f893b2aadcca3237712308f165493015c3fa07d"
 repo = "https://github.com/liminavm/imago.git"
 upstream = "https://gitlab.com/hreitz/imago.git"
 branch = "limina"
-rev = "7f4ffb3e151d445c24af91d4dd718d8b244a92ce"
-base = "6258f51cc74128e775c2fcab03b6e93ae2d2e215"
+rev = "efbae123aca5493d96912045bd48feca663f6ff7"
+base = "ff96e18ce872bb3dec4f1f2d178fc41dc89d3bf6"
 
 # The HOST KosmicKrisp / zink-on-KK Mesa. NOT vendored by `cargo xtask vendor`: this tree lives at
 # /Volumes/mesa-cs/mesa on a case-sensitive sparse image (scripts/ensure-mesa-cs.sh), because Mesa
@@ -53,8 +53,8 @@ base = "6258f51cc74128e775c2fcab03b6e93ae2d2e215"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-kk"
-rev = "c7a121f62c746b942ab8ddde698a938f00035390"
-base = "d44453ce07ba5e1e6b71f7960809c38f2526c1cd"
+rev = "2fe23c384e64ff86d09467edbd750696ea9e7944"
+base = "bd830ce2eead03d775486234902fe22215e334b8"
 tree = "/Volumes/mesa-cs/mesa"
 
 # limina's guest GPU drivers (the vendor build, -Dlimina-vendor=true): KosmicKrisp on the
@@ -66,8 +66,8 @@ tree = "/Volumes/mesa-cs/mesa"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "metal-native-context"
-rev = "6f28899c867ff4bc94957cb5478a18b152864fbc"
-base = "059715d2aa534b74fee59aec6fae316f026d0627"
+rev = "1321823625fb7739bf80929089e6c973323161c8"
+base = "2fe23c384e64ff86d09467edbd750696ea9e7944"
 tree = "/Volumes/mesa-cs/mesa-metal-guest"
 
 # The host GPU renderer, consumed by rutabaga as a Rust crate — nothing here is loaded at

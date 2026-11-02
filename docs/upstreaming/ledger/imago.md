@@ -1,10 +1,10 @@
 <!-- ledger-check: dep=imago -->
 # imago — patch-audit ledger
 
-1 patch; `UPSTREAM_BASE` = upstream `main` `6258f51` (the fork's `main` after the 2026-10-14
-rebase, pre-rebase state kept as tag `pre-rebase-2026-10-14`; it adds `219eb60` "vmdk: convert
-FLAT extent offset to bytes" to release 0.2.5's `c7bb559`). Upstream `main` has since moved to
-`ff96e18` (release 0.2.6, 2026-10-16); the fork's `main` does not carry it yet. Schema + protocol: `README.md`.
+1 patch; `UPSTREAM_BASE` = upstream `main` `ff96e18` (release 0.2.6, 2026-10-16), the fork's
+`main` since the 2026-11-02 rebase; branch `limina` is pinned at `efbae12`. The pre-rebase tip is
+tag `pre-rebase-2026-11-02` (`7f4ffb3`, on `6258f51`), the one before it `pre-rebase-2026-10-14`.
+Schema + protocol: `README.md`.
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
 
 Upstream is **gitlab.com/hreitz/imago** (Hanna Reitz; from the crates.io `repository` field —

@@ -12,7 +12,7 @@ docs-only.
 
 ## Scope
 
-As of 2026-10-21: commits on each pinned fork branch, every one of which now has a ledger row.
+As of 2026-11-02: commits on each pinned fork branch, every one of which now has a ledger row.
 Rows added on 2026-10-16 are phase-0 skeletons (unresearched first guesses), so the per-patch
 verdicts below cover only the series' state at the 2026-08-03 audit. `cargo xtask ledger`
 re-derives the commit counts.
@@ -20,16 +20,16 @@ re-derives the commit counts.
 | series | commits | base | tracker |
 |---|---|---|---|
 | linux | 2 | `v7.1.13` (`gregkh/linux` stable mirror) | lore.kernel.org |
-| kosmickrisp (host KK, `limina-kk`) | 131 | mesa main `d44453ce` | gitlab.fd.o (Anubis) |
-| kosmickrisp-guest (`metal-native-context`; KK bridge + guest venus/virgl/zink fixes) | 31 | `limina-kk` pin `059715d2` | gitlab.fd.o (Anubis) |
-| imago | 1 | `6258f51` | gitlab.com |
+| kosmickrisp (host KK, `limina-kk`) | 141 | mesa main `bd830ce2` | gitlab.fd.o (Anubis) |
+| kosmickrisp-guest (`metal-native-context`; KK bridge + guest venus/virgl/zink fixes) | 29 | `limina-kk` pin `2fe23c38` | gitlab.fd.o (Anubis) |
+| imago | 1 | `ff96e18` (0.2.6) | gitlab.com |
 | mutter | RETIRED | — | series removed 2026-08-03 (own compositor) |
 | virglrenderer (C; pinned by virglrs) | 181 C-tree (616 with the Rust rewrite) | upstream main `aafa9bd2` | gitlab.fd.o (Anubis) |
-| libkrun | 341 | `dc1a18ad` | github.com/libkrun/libkrun |
+| libkrun | 347 | `a0375321` | github.com/libkrun/libkrun |
 | mlx | 2 | `ml-explore/mlx` main `b6642e6` | github.com/ml-explore/mlx |
-| **total** | **689** | | |
+| **total** | **703** | | |
 
-**Superseded since 2026-08-03 (verified 2026-10-16; per-series detail in each file):**
+**Superseded since 2026-08-03 (per-series detail in each file):**
 
 - libkrun 0029 (capset count): upstream `c5d974cd` "fix #565" is in the base. 0119's aspect-shift
   half is fixed by upstream `766da0c7`, while its u16 clock wrap is still in the base. 0058 no
@@ -44,7 +44,11 @@ re-derives the commit counts.
 - The virglrenderer `vulkan_metal.h` fixlet was fixed upstream as `aafa9bd2`, which is now the
   base.
 - imago: the discard-truncate patch was fixed upstream in 0.2.5. The one remaining patch, the
-  EFAULT retry, conflicts with upstream 0.2.6 (`ff96e18`).
+  EFAULT retry, is carried on upstream 0.2.6 (`ff96e18`) since 2026-11-02.
+- Left at the 2026-11-02 rebases: libkrun 0045 (balloon FRQ range check, upstream `72be0998`);
+  KK's own geometry-shader port and its adjacency-unroll poly commit (upstream `5c145789399`,
+  `14f59d06388` and `531e208d92e`, with limina's features re-ported on top); the guest venus
+  missing-bo fix (upstream `b9174e097b1`).
 
 The headline, send queue and action items below are the 2026-08-03 roll-up and have not been
 re-judged. Read them with the list above. Several new upstream candidates and security-relevant
