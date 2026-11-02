@@ -34,9 +34,10 @@ WIRE="$(sed -n 's/^#define LMN_WIRE_VERSION \([0-9]*\)u$/\1/p' \
 [ -n "$WIRE" ] || { echo "no LMN_WIRE_VERSION in $TREE" >&2; exit 1; }
 PREFIX="/opt/limina/$WIRE"
 
-# venus's protocol is a meson subproject, fetched on first use: into the tree, from here, since the
-# build mounts the tree read-only.
-(cd "$TREE" && meson subprojects download venus-protocol >/dev/null)
+# Meson subprojects the build falls back to are fetched on first use: into the tree, from here,
+# since the build mounts the tree read-only. venus's protocol always is one; wayland-protocols is
+# when Mesa needs a newer one than the build base ships (only its XML is used, at build time).
+(cd "$TREE" && meson subprojects download venus-protocol wayland-protocols >/dev/null)
 
 if ! container image inspect "$IMAGE" >/dev/null 2>&1; then
   container build -t "$IMAGE" -f "$ROOT/guest/gpu-drivers/Containerfile" "$ROOT/guest/gpu-drivers"
