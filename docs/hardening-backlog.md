@@ -1204,7 +1204,7 @@ each deferred by choice when GS landed:
   0. The host stack and the vrend tier pass (`spikes/kk-gs/cube-array-layers.c`).
 - **`tes-primitiveid`** counts 24 invocations where 16 are expected: quads drawn as non-indexed
   triangles.
-- **`tes-gs-max-output -small -scan 1 50`** times out on both tiers.
+- **`tes-gs-max-output -small -scan 1 50`**: the varying-limit refusal below, not a GS fault.
 - `arb_gl_spirv` failures are the guest lacking `spirv-as`, not a driver result.
 Latent, no test reaches it yet: `nir_to_msl.c`'s `load_output` builds its mask with a 32-bit
 `1 << location`. A fix ("kk: test a load_output's location against a 64-bit mask") and a poly change
@@ -1213,6 +1213,37 @@ index once", GS MSL about 3.7× smaller, no behaviour change) are not on `limina
 local side branch of its own (`limina-kk-output-mask`, `limina-kk-gs-vertex-hoist`) that no remote
 carries. The hoist needs the GS piglit lists first: host probes do not cover adjacency or line
 inputs.
+
+Each of the three items below kills the guest client, not the host: Metal refuses the pipeline,
+venus then draws with none bound, virglrs poisons the context, and the guest's `vn_ring_submit`
+aborts the app. All three behave identically on the pre-GS-rebase KK (`bb4350f4`) and on the
+rebased one (measured 2026-11-02, zink-on-venus, `accept-piglit.raw`).
+
+### KK advertises more varying components than Metal takes
+KK advertises 128 for `maxVertexOutputComponents`, `maxGeometryOutputComponents`,
+`maxTessellationEvaluationOutputComponents` and `maxFragmentInputComponents`
+(`kk_physical_device.c`); Metal takes 124, and it counts `[[point_size]]` against them while
+`[[position]]` is free. A point-topology draw also always gets a point size
+(`msl_ensure_vertex_point_size_output`, from `kk_lower_hw_vs`), so a vertex stage at the
+advertised maximum is refused: `Failed to create MTLRenderPipelineState: Number of varying
+components(125) exceeds the limit (124)`. Reached by `tes-gs-max-output` (a GS emitting points:
+31 uint4 user varyings plus the point size); `glsl-max-varyings` passes because it draws no points.
+Fix to settle: advertise what Metal takes once a point size is reserved (123, or 120 to keep whole
+vec4s), checking how zink derives its GL limits from these. The limits reach the guest, so a change
+moves what an already-running app sees after a restore.
+
+### fp64 `inverse(dmat4)` kills the Metal compiler
+`{vs,fs,gs}-inverse-dmat4` (both `arb_gpu_shader_fp64` and `glsl-4.00`) fail in every stage with
+`Failed to create MTLLibrary: Compilation failed due to an interrupted connection:
+XPC_ERROR_CONNECTION_INTERRUPTED`: Apple's compiler service dies on the MSL KK emits for the
+emulated-fp64 inverse. Open: the size of that MSL, and whether splitting the lowering (or refusing
+a library above some size before Metal sees it) keeps the compiler alive.
+
+### `arb_shader_precision` division and multiplication fail
+`op-div-float-float`, `op-mult-float-float` and `op-div-vec4-float` fail in the vertex, fragment
+and geometry stages alike; `op-add-float-float` passes. Not a geometry-shader item: the stage does
+not matter. Cause not investigated; Metal's fast-math defaults are the first suspect, not an
+established one.
 
 ### Three commits on `kk-hardening` are unreachable from the pin
 `kk-hardening` in `/Volumes/mesa-cs/mesa` is a local branch no remote carries, on an older base than
@@ -1768,8 +1799,9 @@ and the frame oracle reaching the parked path with no knob set.
 ### `seated_gpu_workload_survives_restore_unchanged` intermittently loses the extension rings on restore
 `l2_desktop_restore_landmarks.rs` fails with `gpu restore: extension rings: GPU host did not reply`
 (libkrun `virtio/gpu/worker.rs`, the `ext.restore_rings` arm), then `staged snapshot replay failed;
-guest session will restart`. Seen in three full-suite runs on different branches (2026-10-18,
-2026-10-19 and 2026-10-20, identical lines); the test passed alone straight after each time. The
+guest session will restart`. Seen in four full-suite runs on different branches (2026-10-18,
+2026-10-19, 2026-10-20 and 2026-11-02, identical lines); the test passed alone straight after each
+time (three solo passes in a row on 2026-11-02). The
 words are the GPU host client's timeout (`crates/limina-gpu-host/src/mach.rs`, the reply wait), and
 every GPU-host call, restore included, shares one flat 10 s deadline (`CALL_TIMEOUT_MS`,
 `crates/limina-gpu-host/src/client.rs`). That makes a slow restore under suite load the first
