@@ -1,5 +1,6 @@
 #!/bin/bash
-# rep.sh <list> <n> — run each listed piglit test n times under the default (virgl) driver
+# rep.sh <list> <n> — run each listed piglit test n times under the default (virgl) driver, or the
+# one MESA_LOADER_DRIVER_OVERRIDE names
 cd ~/piglit
 export PIGLIT_PLATFORM=gbm
 while IFS=$'\t' read -r name cmd; do

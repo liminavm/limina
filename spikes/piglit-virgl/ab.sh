@@ -6,6 +6,8 @@
 # lines) and <out-prefix>.worker.log. Run it once per KK build on the same disk and compare:
 #   join -t$'\t' -1 2 -2 2 <(sort -t$'\t' -k2 old.txt) <(sort -t$'\t' -k2 new.txt) | awk -F'\t' '$2!=$3'
 # A result column made only of rcNNN means the list was malformed and nothing ran.
+# AB_DRIVER=zink runs the tests on zink (over the guest's Vulkan driver) instead of the guest's
+# default GL driver; AB_TIMEOUT caps the whole run in seconds (default 7200).
 set -u
 DISK=${1:?disk}; ICD=${2:?icd json}; RE=${3:?regex}; OUT=${4:?out prefix}
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -36,7 +38,8 @@ if [ ! -s "$OUT.list" ] || awk -F'\t' 'NF!=2 || $2 ~ /^bin\// {bad=1} END {exit 
   echo "malformed or empty list: $OUT.list"; poweroff; exit 1
 fi
 echo "$(wc -l < "$OUT.list") tests"
-gtimeout --kill-after=30 7200 ssh -p "$port" "${SSH[@]}" claude@127.0.0.1 'bash ~/rep.sh ~/ab.list 1' > "$OUT.txt"
+gtimeout --kill-after=30 "${AB_TIMEOUT:-7200}" ssh -p "$port" "${SSH[@]}" claude@127.0.0.1 \
+  "${AB_DRIVER:+MESA_LOADER_DRIVER_OVERRIDE=$AB_DRIVER} bash ~/rep.sh ~/ab.list 1" > "$OUT.txt"
 echo "rep rc=$? results=$(wc -l < "$OUT.txt")"
 cp "$LOG" "$OUT.worker.log"
 poweroff
