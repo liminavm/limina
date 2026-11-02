@@ -274,6 +274,16 @@ if [ "$WHAT" = "zink" ] || [ "$WHAT" = "both" ]; then
       --prefix "$ZINK_PREFIX"
   ninja -C "$ZINK_BUILD" ${NINJA_JOBS[@]+"${NINJA_JOBS[@]}"}
   meson install -C "$ZINK_BUILD"
+  # libgallium's file name carries the Mesa version, so an install after a version bump leaves
+  # the old one beside it, and the check below (and build-app.sh) then refuse two. Only this
+  # build's is current.
+  mesa_version="$(meson introspect --projectinfo "$ZINK_BUILD" |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])')"
+  for lib in "$ZINK_PREFIX"/lib/libgallium-*-devel.dylib; do
+    [ -e "$lib" ] && [ "$lib" != "$ZINK_PREFIX/lib/libgallium-$mesa_version.dylib" ] || continue
+    echo "==> removing $lib: this build is Mesa $mesa_version"
+    rm -f -- "$lib"
+  done
 fi
 
 # ---- verify what the consumers actually open --------------------------------------------------
