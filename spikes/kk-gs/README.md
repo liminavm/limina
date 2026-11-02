@@ -24,6 +24,12 @@ json's path, so rebuild the prefix together with KK or the probe runs the old dr
 zink turns it into `vkCmdDrawIndirectByteCountEXT`, and after a GS capture only the GPU knows the
 byte count, so KK must build the draw on the GPU. Exit 0 = drawn as captured.
 
+**`gs-flat-provoking.c`** checks that a geometry shader's flat output comes from the provoking
+vertex of each strip primitive it emits, under both conventions. Metal provokes from the first
+vertex only, so KK emulates the last-vertex one (GL's default) in poly's rasterization program.
+Exit 0 = both conventions right; with the emulation off, last-vertex reads the first vertex's
+colours.
+
 **`cube-array-layers.c`** renders each of the 18 layer-faces of a cube-map array through an FBO
 layer and samples them back through a `samplerCubeArray`, the way piglit's
 `arb_texture_cube_map_array-fbo-cubemap-array` does. It passes on the host stack in every variant
