@@ -505,6 +505,31 @@ a real host-pressure episode. virtio-mem unplug compacts in the guest before it 
 
 ---
 
+### Upstream's `Replace` free-page reporting against our `ReleasedRam`: measure and pick one
+Upstream libkrun (`e1b95c92`, `0fd8324e`, `a7df73ce`) ships an opt-in
+`FreePageReportingMode::Replace` for the problem our balloon commits solve with `ReleasedRam`.
+`Replace` reclaims only 2 MiB-aligned report ranges (the rest get `MADV_FREE`): the VMM worker
+`hv_vm_unmap`s the range, `mmap(MAP_FIXED|MAP_ANON)`s fresh memory over it and maps it back before
+the report completes. Ours coalesces reports to whole 16 KiB host pages, unmaps them, marks them
+`MADV_FREE_REUSABLE`, records them in a ledger, and heals the guest's next touch from a stage-2
+fault (`src/hvf/src/released_ram.rs`).
+
+The two cannot run together. `Replace` remaps behind the ledger, while inflate still releases
+through `ReleasedRam`; a reclaim over a range the ledger holds leaves it mapped, and the next heal
+or deflate `hv_vm_map` fails on the overlap and stops the VM (`Fatal`). The libkrun fork must refuse
+`Replace` on macOS while `ReleasedRam` is wired (an error from `set_free_page_reporting_mode` /
+`set_map_sender`), with upstream's `test_default_mode_marks_reported_pages_as_free` rewritten to
+match. limina never selects `Replace` (`crates/` has no `set_free_page_reporting_mode` call).
+
+The measurements disagree. `e1b95c92` says that on macOS 26.5.1 / M4 Pro neither `MADV_FREE` nor
+`MADV_FREE_REUSABLE` released pages the guest wrote through stage-2, "not even under memory
+pressure"; `spikes/balloon-madvise/RESULTS.md` has `MADV_FREE_REUSABLE` reclaiming fully while the
+range is `hv_vm_map`'d. Candidate discriminators: who dirtied the pages (host CPU or guest through
+stage-2), and what was read (`phys_footprint` or the host's free pages). Next step: one spike that
+dirties guest RAM from the guest, reports it, and reads both `phys_footprint` and host free memory,
+under pressure and without, for `Replace`, our path and plain `MADV_FREE`, on the shipping macOS and
+on an M3+ host. Then keep one mechanism, or take `Replace`'s remap into `ReleasedRam`'s ledger.
+
 ## vCPU & power
 
 Background for this section — why idle guests need a real-time band, what it costs, and what
