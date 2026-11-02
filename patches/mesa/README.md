@@ -1,29 +1,15 @@
-# patches/mesa — RETIRED pool (2026-08-05, task #11)
+# patches/mesa — tombstone
 
-**This directory is no longer a build input.** The shipping guest-mesa patches moved to the
-fork model: commits on `liminavm/mesa`'s **`limina-guest`** branch (pinned by
-`third_party/manifest.toml [mesa-guest]`), exported by `scripts/export-mesa-guest-patches.sh`
-into **`patches/mesa-guest/`** — that committed series is what both RPM tracks
-(`scripts/provision/f44/build-mesa-rpm.sh`, `scripts/build-mesa-rpm.sh`) now apply. The six
-migrated diffs were deleted from here (old→new: 0015→0001, 0011→0002, 0012→0003, 0013→0004,
-0016→0005, 0017→0006); this file's pre-retirement revision holds the full pool history
-(bases×consumers map, 0009-vs-0015, the dev-enh forensics, drop-guest-zink) — `git log` it.
+Nothing here is a build input. limina's Mesa changes are commits on the `liminavm/mesa` fork, on
+two branches:
 
-What remains here is **reference material with no live consumer**, kept because it is
-upstream-send-queue collateral (`docs/upstreaming/ledger/mesa.md` is authoritative on each):
+- **`limina-kk`** — the host KosmicKrisp + zink-on-KK build, pinned by `[kosmickrisp]` in
+  `third_party/manifest.toml`; audit status in `docs/upstreaming/ledger/kosmickrisp.md`.
+- **`metal-native-context`** — the guest vendor drivers, `limina-kk` plus guest-only commits,
+  pinned by `[kosmickrisp-guest]`; audit status in `docs/upstreaming/ledger/kosmickrisp-guest.md`.
 
-- `0001` zink nullDescriptor emulation (MR !37115 exists upstream) — dead in guest
-  (drop-guest-zink 2026-08-04); host zink rides the `limina-kk` fork instead.
-- `0002` GL-frontend discard NULL-guard — MR-worthy (reachable under virgl too), but not
-  currently shipped by any build.
-- `0003`/`0004`/`0006` zink external-semaphore/kopper guards — dead in guest; MR-worthy as
-  "gate optional entrypoints".
-- `0009`/`0010` the recovered dev-enh venus present fix (pre-26.1.4 bases) — historical;
-  consumed only by the archived `scripts/archive/build-venus.sh` dev vehicle (archived with
-  this retirement). The living variant is `limina-guest` commit 0001.
-- `0014` zink unflushed-batch lost-wakeup fix — dead in guest; lives on in the HOST build as
-  `limina-kk` fork commit `47308c0f026`; both bugs remain upstream-MR queue items.
-- `reference/` — upstream MR snapshots and related collateral.
+The guest keeps its distro's Mesa; there is no separate guest-Mesa branch or exported patch series.
+Patches that once lived here and are still worth sending upstream have rows in those ledgers; the
+diffs themselves are in this directory's `git log`.
 
-Do not add new patches here. Guest mesa changes go on the fork branch (worktree
-`/Volumes/mesa-cs/mesa-guest`), per `patches/mesa-guest/README.md`.
+Do not add patches here: commit on the branch the change targets.
