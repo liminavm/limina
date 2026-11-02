@@ -20,14 +20,14 @@ re-derives the commit counts.
 | series | commits | base | tracker |
 |---|---|---|---|
 | linux | 2 | `v7.1.13` (`gregkh/linux` stable mirror) | lore.kernel.org |
-| kosmickrisp (host KK, `limina-kk`) | 141 | mesa main `bd830ce2` | gitlab.fd.o (Anubis) |
-| kosmickrisp-guest (`metal-native-context`; KK bridge + guest venus/virgl/zink fixes) | 29 | `limina-kk` pin `2fe23c38` | gitlab.fd.o (Anubis) |
+| kosmickrisp (host KK, `limina-kk`) | 142 | mesa main `bd830ce2` | gitlab.fd.o (Anubis) |
+| kosmickrisp-guest (`metal-native-context`; KK bridge + guest venus/virgl/zink fixes) | 29 | `limina-kk` pin `2c757c01` | gitlab.fd.o (Anubis) |
 | imago | 1 | `ff96e18` (0.2.6) | gitlab.com |
 | mutter | RETIRED | — | series removed 2026-08-03 (own compositor) |
 | virglrenderer (C; pinned by virglrs) | 181 C-tree (616 with the Rust rewrite) | upstream main `aafa9bd2` | gitlab.fd.o (Anubis) |
 | libkrun | 347 | `a0375321` | github.com/libkrun/libkrun |
 | mlx | 2 | `ml-explore/mlx` main `b6642e6` | github.com/ml-explore/mlx |
-| **total** | **703** | | |
+| **total** | **704** | | |
 
 **Superseded since 2026-08-03 (per-series detail in each file):**
 

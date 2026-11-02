@@ -1,12 +1,12 @@
 <!-- ledger-check: dep=kosmickrisp -->
 # kosmickrisp — patch-audit ledger
 
-141 commits; base `bd830ce2eea` (mesa main, rebased 2026-11-02), pin `2fe23c384e6`
+142 commits; base `bd830ce2eea` (mesa main, rebased 2026-11-02), pin `2c757c014c4`
 (`third_party/manifest.toml` [kosmickrisp]); see *Rebase executed* below.
 Schema + protocol: `README.md`. The `checked` column of rows 0001–0019 records main `84acd848`
 (2026-08-03), which is three bases old (`418f2963a15` on 2026-08-05, `d44453ce07b` on 2026-10-14,
 then `bd830ce2eea` on 2026-11-02); those `need` verdicts have not been re-verified against the
-current base. 106 commits have only a skeleton row (*Unaudited commits* at the end).
+current base. 107 commits have only a skeleton row (*Unaudited commits* at the end).
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
 
 **Disclosure: not gated** (user decision, 2026-10-21; `README.md`, phase 3). The `sec: yes`
@@ -409,3 +409,9 @@ kosmickrisp`; the last column is a first guess, not researched against upstream.
 | `e92979b775b` | kk: capture transform feedback and count primitives from a geometry shader | `src/kosmickrisp/libkk/kk_geometry.cl`, `src/kosmickrisp/libkk/kk_query.cl`, `src/kosmickrisp/vulkan/kk_cmd_buffer.h` +7 |  | upstream after XFB (0001) — needs limina's transform feedback upstream first; `spikes/kk-gs/xfb-draw-auto.c`. sec: no |
 | `7f320a6a0af` | kk: put the provoking vertex first in an unroll only for flat inputs | `src/kosmickrisp/libkk/kk_draws.cl`, `src/kosmickrisp/vulkan/kk_cmd_draw.c` |  | upstream-now — a plain upstream bug: unrolls reversed every line; piglit `ignore-adjacent-vertices`. sec: no |
 | `2fe23c384e6` | poly: give a geometry shader's rasterized position all four components | `src/poly/nir/poly_nir_lower_gs.c` |  | upstream-now — a plain upstream bug: an asserts build aborts the host and Metal refuses a float3 position; piglit `primitive-id-restart`. sec: yes (guest-reachable host abort in an asserts build only) |
+
+### K. Housekeeping after the 2026-11-02 rebase
+
+| commit | subject | files | diag | first guess (unresearched) |
+|---|---|---|---|---|
+| `2c757c014c4` | kk: stop naming a shader dump the branch never carried | `src/kosmickrisp/vulkan/kk_shader.c` |  | fold-into "kk: name a pipeline by its MSL, not by a pointer" — comments only. sec: no |

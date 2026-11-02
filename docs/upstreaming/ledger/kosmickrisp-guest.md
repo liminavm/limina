@@ -2,7 +2,7 @@
 # kosmickrisp-guest — upstreaming ledger
 
 `liminavm/mesa` `metal-native-context` branch (`third_party/manifest.toml [kosmickrisp-guest]`),
-pin `1321823625f`, base `2fe23c384e6` — the `[kosmickrisp]` (`limina-kk`) pin. The series is the
+pin `0c590953a77`, base `2c757c014c4` — the `[kosmickrisp]` (`limina-kk`) pin. The series is the
 host KosmicKrisp branch plus guest-only commits: the KosmicKrisp driver on the limina
 native-context transport (the limina bridge) inside the guest, the guest WSI, and the venus,
 virgl, zink and VA fixes the guest needs. A vendor build (`-Dlimina-vendor`) drives every
@@ -11,7 +11,9 @@ Rows here cover only `base..rev`; the `limina-kk` commits underneath are in `kos
 Rebased 2026-11-02 onto the new `limina-kk` pin; the old tip is tag `pre-rebase-2026-11-02-mnc`
 (`6f28899c867`, 36 commits on `059715d2aa5`). Its base sat seven commits below the old
 `limina-kk` pin, so six of its rows were `limina-kk` commits and now sit under the base; the
-venus missing-bo fix left, superseded upstream. 29 commits remain, each with a row.
+venus missing-bo fix left, superseded upstream. 29 commits remain, each with a row. A restack the
+same day, onto a comment-only `limina-kk` commit, changed no commit here; the tip it replaced
+is tag `pre-restack-2026-11-02-mnc` (`1321823625f`), the one limina `9a3957ab` pinned.
 Schema + protocol: `README.md`. Rows are keyed by SUBJECT.
 
 Not vendored by `cargo xtask vendor`, for the same reason as `[kosmickrisp]` (Mesa needs a
@@ -30,7 +32,7 @@ from the bridge/vendor work. Match a row to the branch by subject.
 not been re-checked against this base; `unchecked` rows are first guesses from the commit
 messages and a read of the diffs. One spot check: upstream `main` `d44453ce07b` (2026-10-14) still
 prints MSL floats with `"%.*le"` (`src/kosmickrisp/compiler/msl_type_inference.c:778`), the bug
-`86b2788ec1b` fixes.
+`f1383157fce` fixes.
 
 The upstreamable subset lives as branch `upstream/guest-2026-10` in `liminavm/mesa` (on `main`
 `b39d173ca93`), rewritten to upstream form: Mesa-style message, verified `Fixes:`, `Cc:
