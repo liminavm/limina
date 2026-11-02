@@ -1657,6 +1657,18 @@ under load before changing anything.
 
 ## Guest images & delivery
 
+### The managed Debian guest enumerates limina's venus twice
+With the vendor drivers at wire 5 (`1321823`) and the transport off, `vulkaninfo --summary` on the
+managed Debian VM (testing, kernel 7.2.9, Mesa 26.1.6) lists two `Virtio-GPU Venus (Apple M1 Max)`
+devices, both `driverInfo` `Mesa 27.0.0-devel (limina)`, so the transport-select layer
+(`guest/gpu-drivers/layer/transport_select.c`) rightly hides neither. Seen 2026-11-02, right after
+an in-place install and before a reboot. A clone of F44 Venus with the same drivers and the
+transport off lists one. `/etc/vulkan/icd.d` on the Debian guest held only `limina-5.json` and
+`limina-venus.json`, so the second load comes from somewhere else. The suspects: a manifest
+outside `/etc` (a leftover of the wire-4 install, or Debian's own `virtio_icd` resolving to our
+library), or two render nodes. Settle it with `VK_LOADER_DEBUG=driver vulkaninfo` on the booted
+guest, which needs the user for the LUKS passphrase.
+
 ### The stock guest's i2c-virtio driver can panic at switch-root (host mitigated, guest unfixed)
 The driver's interruptible wait frees in-flight requests. If systemd SIGKILLs the initrd's udev
 while it reads the SBS battery's sysfs, the completion interrupt then calls `complete()` on freed
