@@ -143,14 +143,42 @@ describe() {
   else
     dirty='clean'
   fi
-  if [ -z "$(git -C "$path" for-each-ref --format='x' refs/remotes 2>/dev/null)" ]; then
-    reach='no remote refs in this clone'
-  elif [ -n "$(git -C "$path" branch -r --contains "$hash" 2>/dev/null)" ]; then
-    reach='in a fetched remote ref'
-  else
-    reach='**not in any fetched ref** (may be unpushed, or refs stale — `git fetch` to tell)'
-  fi
+  reach=$(reach_of "$path" "$hash")
   printf '| %s | `%s` | %s | %s | %s |\n' "$label" "$hash" "$branch" "$dirty" "$reach"
+}
+
+# reach_of <clone> <rev> — whether that clone's fetched remote refs carry the rev (see above).
+reach_of() {
+  local path="$1" hash="$2"
+  if ! git -C "$path" rev-parse --git-dir >/dev/null 2>&1; then
+    echo 'no clone here to check'
+  elif [ -z "$(git -C "$path" for-each-ref --format='x' refs/remotes 2>/dev/null)" ]; then
+    echo 'no remote refs in this clone'
+  elif [ -n "$(git -C "$path" branch -r --contains "$hash" 2>/dev/null)" ]; then
+    echo 'in a fetched remote ref'
+  else
+    echo '**not in any fetched ref** (may be unpushed, or refs stale — `git fetch` to tell)'
+  fi
+}
+
+# The guest GPU drivers are not in the bundle. What a guest paired with this build runs is the
+# set packaged beside it, in this checkout's target/gpu-drivers, so that is what the row names —
+# not the [kosmickrisp-guest] checkout, which can sit anywhere while the drivers come from another
+# tree. build-gpu-drivers.sh stamps each wire's tree with the Mesa rev it was built from.
+GPU_DRIVERS="${LIMINA_GPU_DRIVERS_DIR:-$ROOT/target/gpu-drivers}"
+describe_guest_drivers() {
+  local stamp wire rev built
+  stamp=$({ ls -d "$GPU_DRIVERS"/limina-gpu-drivers/drivers/opt/limina/*/MESA_REV 2>/dev/null || true; } |
+          sort -V | tail -n 1)
+  if [ -z "$stamp" ]; then
+    echo '| kosmickrisp-guest | — | — | — | none packaged in this checkout (`target/gpu-drivers`); a guest names what it runs in `/opt/limina/<wire>/MESA_REV` |'
+    return
+  fi
+  wire=$(basename "$(dirname "$stamp")")
+  rev=$(tr -d '[:space:]' < "$stamp")
+  built=$(date -r "$stamp" '+%Y-%m-%d %H:%M')
+  printf '| kosmickrisp-guest | `%s` | wire %s | packaged %s, not in the bundle | %s |\n' \
+    "$rev" "$wire" "$built" "$(reach_of "$(pin_tree kosmickrisp-guest)" "$rev")"
 }
 
 INDEX="$LOT/INDEX.md"
@@ -180,8 +208,9 @@ fi
   echo "- Profile: **$PROFILE** (the renderer is compiled into the worker and inherits this;"
   echo "  a debug build still carries an optimized virglrs via the root Cargo.toml overrides)"
   # `codesign -dv` prints Identifier/TeamIdentifier for a disk image but no Authority line
-  # without a deeper verbose level, so read the two fields it does emit.
-  sig=$(codesign -dv "$LOT/$NAME" 2>&1 |
+  # without a deeper verbose level, so read the two fields it does emit. On an unsigned image it
+  # exits nonzero, which pipefail would turn into the end of this script.
+  sig=$({ codesign -dv "$LOT/$NAME" 2>&1 || true; } |
         awk -F= '/^TeamIdentifier=/{t=$2} /^Identifier=/{i=$2} END{
           if (i=="") print "<unsigned>"; else print i (t==""?"":" (team " t ")")}')
   echo "- Signed: $sig"
@@ -206,9 +235,10 @@ fi
   # pin_tree: the tree each dependency is on this checkout, overrides included. Neither mesa
   # build lives under third_party/ — anything that walks that directory misses the host renderer
   # and the guest GPU drivers entirely.
-  for dep in libkrun virglrs imago cardea linux kosmickrisp kosmickrisp-guest; do
+  for dep in libkrun virglrs imago cardea linux kosmickrisp; do
     describe "$dep" "$(pin_tree "$dep")"
   done
+  describe_guest_drivers
   echo
 } >> "$INDEX"
 
