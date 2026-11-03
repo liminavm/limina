@@ -471,6 +471,23 @@ pub fn hvf_enabled() -> bool {
     )
 }
 
+/// Whether a guest kernel release (`uname -r`) is one the supervisor offers free page reporting
+/// to: mainline from 7.2, and 7.1 from 7.1.8, the series the test images run. A kernel without
+/// upstream 0b45f6927a14 crashes on suspend-to-idle once it negotiates reporting, so a test that
+/// forces it across a suspend skips the others. The full table, older stable series included, is
+/// `crates/limina/src/page_reporting.rs`.
+pub fn kernel_takes_page_reporting(release: &str) -> bool {
+    let mut v = release
+        .split(|c: char| !c.is_ascii_digit())
+        .map(|n| n.parse::<u32>().unwrap_or(0));
+    let (major, minor, patch) = (
+        v.next().unwrap_or(0),
+        v.next().unwrap_or(0),
+        v.next().unwrap_or(0),
+    );
+    (major, minor) >= (7, 2) || ((major, minor) == (7, 1) && patch >= 8)
+}
+
 /// Gate a boot test. Call at the top: `if !require_hvf_or_skip("name") { return; }`.
 ///
 /// Prints a clear SKIPPED line (Rust's test harness has no native "skipped" state, so a

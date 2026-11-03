@@ -171,21 +171,6 @@ fn stock_guest_survives_inplace_s2idle_with_correct_clock() {
     eprintln!("teardown outcome: {outcome:?}");
 }
 
-/// Whether a kernel release is one `page_reporting` offers free page reporting to: mainline from
-/// 7.2, and 7.1 from 7.1.8, the series these images run. The full table, older stable series
-/// included, is `crates/limina/src/page_reporting.rs`.
-fn takes_page_reporting(release: &str) -> bool {
-    let mut v = release
-        .split(|c: char| !c.is_ascii_digit())
-        .map(|n| n.parse::<u32>().unwrap_or(0));
-    let (major, minor, patch) = (
-        v.next().unwrap_or(0),
-        v.next().unwrap_or(0),
-        v.next().unwrap_or(0),
-    );
-    (major, minor) >= (7, 2) || ((major, minor) == (7, 1) && patch >= 8)
-}
-
 /// A guest offered free page reporting, with reports flowing from RAM and plugged virtio-mem
 /// blocks, suspends to idle and wakes in place. A kernel without upstream 0b45f6927a14 crashes
 /// here (the reporting work outlives `virtballoon_freeze`), which is why `page_reporting` offers
@@ -216,7 +201,7 @@ fn a_guest_with_page_reporting_survives_inplace_s2idle() {
         .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable");
     let kernel = ssh_retry(&guest, "uname -r").trim().to_string();
-    if !takes_page_reporting(&kernel) {
+    if !limina_test::kernel_takes_page_reporting(&kernel) {
         eprintln!("SKIPPED {NAME}: the guest runs {kernel}, which lacks the page reporting fix");
         let _ = guest.shutdown(Duration::from_secs(20));
         return;

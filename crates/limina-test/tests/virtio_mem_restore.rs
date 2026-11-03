@@ -7,6 +7,10 @@
 //! The region sits above the shared-memory window, where the snapshot takes nothing by itself,
 //! and the guest's driver reads the plugged size back on thaw: the snapshot carries the plugged
 //! blocks as RAM and the device's state beside them.
+//!
+//! With free page reporting on, the plugged blocks also hold released ranges when the snapshot is
+//! taken, unmapped from the guest and some renewed to zero; the blob written over part of them
+//! afterwards must come back intact all the same.
 
 use std::time::{Duration, Instant};
 
@@ -35,19 +39,44 @@ fn blob_sum(guest: &Guest) -> String {
 
 #[test]
 fn plugged_virtio_mem_survives_a_suspend_and_restore() {
-    if !limina_test::require_hvf_or_skip("plugged_virtio_mem_survives_a_suspend_and_restore") {
+    suspend_and_restore("plugged_virtio_mem_survives_a_suspend_and_restore", false);
+}
+
+/// Needs a guest kernel that takes reporting across a suspend (`LIMINA_TEST_DISK` at an image
+/// that runs one); skips otherwise, which today includes the default stock test image.
+#[test]
+fn plugged_virtio_mem_with_released_pages_survives_a_suspend_and_restore() {
+    suspend_and_restore(
+        "plugged_virtio_mem_with_released_pages_survives_a_suspend_and_restore",
+        true,
+    );
+}
+
+fn suspend_and_restore(name: &str, page_reporting: bool) {
+    if !limina_test::require_hvf_or_skip(name) {
         return;
     }
-    let base = match GuestConfig::baseline_fedora_from_env() {
+    let config = if page_reporting {
+        GuestConfig::fedora_from_env()
+    } else {
+        GuestConfig::baseline_fedora_from_env()
+    };
+    let base = match config {
         Ok(mut cfg) => {
             cfg.ram_mib = 4096;
-            cfg.with_net()
+            let cfg = cfg
+                .with_net()
                 .with_balloon_control()
                 .with_env("LIMINA_VIRTIO_MEM", "2048")
-                .with_supervisor_log()
+                .with_supervisor_log();
+            if page_reporting {
+                cfg.with_supervisor_arg("--balloon-free-page-reporting")
+            } else {
+                cfg
+            }
         }
         Err(e) => {
-            eprintln!("SKIPPED plugged_virtio_mem_survives_a_suspend_and_restore: {e}");
+            eprintln!("SKIPPED {name}: {e}");
             return;
         }
     };
@@ -55,12 +84,42 @@ fn plugged_virtio_mem_survives_a_suspend_and_restore() {
     let mut g1 = Guest::boot(&base.clone().with_snapshot()).expect("spawning the supervisor");
     g1.wait_for_ssh(Duration::from_secs(300))
         .expect("guest did not reach sshd");
+    if page_reporting {
+        let kernel = g1.ssh_exec("uname -r").expect("reading the kernel");
+        if !limina_test::kernel_takes_page_reporting(kernel.trim()) {
+            eprintln!(
+                "SKIPPED {name}: the guest runs {}, which lacks the page reporting fix",
+                kernel.trim()
+            );
+            let _ = g1.shutdown(Duration::from_secs(30));
+            return;
+        }
+    }
     let booted = boot_id(&g1);
     g1.set_mem_target(PLUG).expect("asking the guest to plug");
     let deadline = Instant::now() + Duration::from_secs(60);
     while g1.balloon_stats().expect("stats").mem_plugged < PLUG {
         assert!(Instant::now() < deadline, "the guest did not plug 1 GiB");
         std::thread::sleep(Duration::from_millis(500));
+    }
+    if page_reporting {
+        // Fill and free the guest's memory first, so the plugged blocks hold released ranges.
+        g1.ssh_exec(
+            r#"sudo sh -c '
+              avail=$(awk "/^MemAvailable:/ {print int(\$2 / 1024)}" /proc/meminfo)
+              mount -o remount,size=$((avail + 512))M /dev/shm
+              dd if=/dev/zero of=/dev/shm/fill bs=1M count=$((avail - 384)) 2>/dev/null
+              rm /dev/shm/fill'"#,
+        )
+        .expect("filling and freeing guest memory");
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while g1.balloon_stats().expect("stats").released < PLUG {
+            assert!(
+                Instant::now() < deadline,
+                "the guest never reported a gigabyte free"
+            );
+            std::thread::sleep(Duration::from_millis(500));
+        }
     }
     // Fill nearly all of the guest's free memory, so the blob lands in plugged blocks too.
     let fill = g1
@@ -73,7 +132,12 @@ fn plugged_virtio_mem_survives_a_suspend_and_restore() {
         )
         .expect("writing the blob");
     let sum = blob_sum(&g1);
-    eprintln!("blob before the suspend: {fill} sha256 {sum}");
+    let before = g1.balloon_stats().expect("stats before the suspend");
+    eprintln!(
+        "blob before the suspend: {fill} sha256 {sum}; released {} MiB, remapped {} MiB",
+        before.released / MIB,
+        before.remapped / MIB
+    );
 
     g1.suspend_bracket().expect("sending the suspend bracket");
     let outcome = g1
