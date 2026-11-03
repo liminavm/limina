@@ -137,10 +137,16 @@ boot probed. `LIMINA_VIRTIO_MEM=split` forces Split on every boot with a range, 
 takes its recorded layout. `LIMINA_VIRTIO_MEM=<MiB>` is a test lever, not a mode: a fixed region
 beside Whole RAM, plugged only through the control socket's `mem` command.
 
-Free page reporting is off for every guest (`crates/limina/src/main.rs:357-362`, the stock
-suspend-to-idle crash; the upstream fix 0b45f6927a14 is in v7.2-rc6, Fedora 44 runs 6.19). Where it
-is on, its reports are naturally aligned 2 MiB blocks on a 4 KiB guest, which also map onto 2 MiB
-tagged blocks with no agent.
+Free page reporting is offered only to a guest whose kernel carries upstream 0b45f6927a14: without
+it, a guest that negotiates reporting crashes on suspend-to-idle. Mainline has it from v7.2-rc6 and
+the stable series from 7.1.8, 6.18.44, 6.12.103, 6.6.151, 6.1.183, 5.15.216 and 5.10.265; 6.19 and
+7.0 never got it. A managed VM learns which kernel its guest runs from `qemu-guest-agent` and
+offers reporting from its next cold boot (`crates/limina/src/page_reporting.rs`); a guest with no
+agent is never offered it. Its reports are naturally aligned 2 MiB blocks on a 4 KiB guest, which
+map onto 2 MiB tagged blocks with no agent. In a Split layout they cover the plugged blocks too:
+libkrun's release tracker takes virtio-mem's region as owned-block RAM, and an unplug goes through
+the tracker, so the free memory of blocks that stay plugged returns to the host as well
+(`crates/limina-test/tests/virtio_mem.rs`, `page_reporting_returns_free_memory_in_plugged_blocks`).
 
 ## 4. Measurements first, with what would block
 

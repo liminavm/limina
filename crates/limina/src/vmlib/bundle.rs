@@ -639,6 +639,7 @@ pub(crate) mod tests {
                 gpu_metal: None,
                 machine: None,
                 mem_layout: None,
+                page_reporting: None,
             }),
         )
         .unwrap();

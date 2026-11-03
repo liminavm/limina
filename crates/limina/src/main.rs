@@ -31,6 +31,7 @@ mod lifecycle;
 mod moc;
 mod nested_virt;
 mod no_throttle;
+mod page_reporting;
 mod power_profile;
 mod qga;
 mod runtime_ctl;
@@ -354,11 +355,10 @@ struct Cli {
     #[arg(long, value_enum, default_value_t)]
     serial_console: vmlib::schema::SerialConsole,
 
-    /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest — forwarded to the
-    /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
-    /// suspend-to-idle (upstream `virtballoon_freeze` frees the reporting virtqueue while its
-    /// non-freezable worker is still live). Enable only for enhanced-tier guests carrying the
-    /// kernel fix (the page-reporting-vs-suspend fix, upstream 0b45f69, on our kernel fork); stock guests keep inflate-time reclaim and suspend safely.
+    /// Advertise `VIRTIO_BALLOON_F_REPORTING` (free page reporting) to the guest on every boot.
+    /// Without it a managed VM offers it once its guest agent has named a kernel that carries
+    /// upstream 0b45f6927a14 (`page_reporting`): an older Linux guest that negotiates page
+    /// reporting crashes on suspend-to-idle.
     #[arg(long)]
     balloon_free_page_reporting: bool,
 
@@ -1828,8 +1828,7 @@ fn cli_from_definition(
         display_control_socket: None,
         memory,
         balloon_control_socket: None,
-        // Managed VMs keep the safe default (off): a stock guest that negotiates F_REPORTING
-        // crashes on s2idle. Per-VM enablement belongs with enhanced-tier capability detection.
+        // Not forced: each boot follows what the guest's kernel taught (`page_reporting`).
         balloon_free_page_reporting: false,
         balloon_deflate_on_oom: cfg.hardware.balloon_deflate_on_oom,
         reclaim: ov.reclaim.unwrap_or(cfg.hardware.reclaim),
@@ -2374,12 +2373,6 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push(path_arg(path)?);
     }
 
-    // FRQ fast-reclaim opt-in (see the flag doc: enhanced-tier guests only; a stock guest that
-    // negotiates it crashes on s2idle).
-    if cli.balloon_free_page_reporting {
-        args.push("--balloon-free-page-reporting".into());
-    }
-
     // DEFLATE_ON_OOM escape hatch (see the flag doc: default off so balloon accounting stays
     // transparent and systemd-oomd doesn't fire against phantom memory use).
     if cli.balloon_deflate_on_oom {
@@ -2620,6 +2613,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             ipa_granule: cli.ipa_granule,
             nested_virt: cli.nested_virt,
             gpu_metal: cli.gpu_metal,
+            page_reporting: cli.balloon_free_page_reporting,
             machine,
             on_window_close: cli.on_window_close,
             // The restore splash lives beside the snapshot (`splash_beside`).
@@ -2678,6 +2672,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         suspend_state_file: cli.suspend_state_file.clone(),
         nested_virt: cli.nested_virt,
         gpu_metal: cli.gpu_metal,
+        page_reporting: cli.balloon_free_page_reporting,
         machine,
         mem,
         links,
@@ -2702,6 +2697,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                 gpu_metal: Some(supervisor::spawned_gpu_metal()),
                 machine: Some(crate::supervisor::spawned_machine()),
                 mem_layout: Some(crate::elastic_mem::spawned()),
+                page_reporting: Some(crate::page_reporting::spawned()),
             };
             match vmlib::state::set_suspended(state_file, Some(sus)) {
                 Ok(()) => log::info!("VM suspended; snapshot at {}", snapshot.display()),
@@ -3461,6 +3457,7 @@ mod tests {
                 gpu_metal: None,
                 machine: None,
                 mem_layout: None,
+                page_reporting: None,
             }),
         )
         .unwrap();

@@ -633,6 +633,7 @@ impl ControlPlane {
     /// the first use finds out.
     pub fn attach_qga(&self, host_fd: std::os::fd::OwnedFd) -> Result<()> {
         let qga = Arc::new(crate::qga::client::Qga::start(host_fd)?);
+        crate::page_reporting::learn(qga.clone());
         *self.inner.qga.lock().unwrap() = Some(QgaSlot {
             client: qga.clone(),
             attached_at: Instant::now(),

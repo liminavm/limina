@@ -254,3 +254,137 @@ fn movable_onlined_blocks_unplug_whole_under_kernel_objects() {
         mib(left)
     );
 }
+
+/// Free page reporting returns the guest's free memory inside plugged blocks, not only in its
+/// RAM, and leaves the blocks unpluggable. The guest runs on 2 GiB of RAM with 1 GiB plugged and
+/// fills tmpfs with all but a little of its available memory, more than its RAM has free, so part
+/// of the fill lands in the plugged blocks; then it frees it. Without the plugged blocks in the
+/// release tracker the worker refuses those reports and its footprint falls by the RAM part only.
+#[test]
+fn page_reporting_returns_free_memory_in_plugged_blocks() {
+    const NAME: &str = "page_reporting_returns_free_memory_in_plugged_blocks";
+    const RAM_MIB: u64 = 2048;
+    if !limina_test::require_hvf_or_skip(NAME) {
+        return;
+    }
+    let cfg = match GuestConfig::baseline_fedora_from_env() {
+        Ok(mut cfg) => {
+            cfg.ram_mib = RAM_MIB as usize;
+            cfg.with_net()
+                .with_balloon_control()
+                .with_supervisor_log()
+                .with_supervisor_arg("--balloon-free-page-reporting")
+                .with_env("LIMINA_VIRTIO_MEM", &REGION_MIB.to_string())
+        }
+        Err(e) => {
+            eprintln!("SKIPPED {NAME}: {e}");
+            return;
+        }
+    };
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    guest
+        .wait_for_ssh(Duration::from_secs(300))
+        .expect("guest sshd never became reachable through the forward");
+
+    guest
+        .set_mem_target(PLUG)
+        .expect("asking the guest to plug");
+    let plugged = wait_for(&guest, Duration::from_secs(60), |s| s.mem_plugged >= PLUG);
+    assert!(
+        plugged.mem_plugged >= PLUG,
+        "the guest plugged {} MiB of the {} MiB asked",
+        mib(plugged.mem_plugged),
+        mib(PLUG)
+    );
+
+    // All but 384 MiB of what the guest has available, short of making it swap. `/dev/shm` holds
+    // half the RAM the guest booted with, so it is grown to take the fill.
+    let avail_mib: u64 = guest
+        .ssh_exec("awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo")
+        .expect("reading the guest's meminfo")
+        .trim()
+        .parse()
+        .expect("meminfo gave a number");
+    let fill_mib = avail_mib - 384;
+    let filled = guest
+        .ssh_exec(&format!(
+            "sudo sh -c 'mount -o remount,size={fill_mib}m /dev/shm && \
+             dd if=/dev/zero of=/dev/shm/fill bs=1M count={fill_mib} 2>&1 | tail -n 1; \
+             grep -E \"^(MemTotal|MemFree|Shmem|SwapFree):\" /proc/meminfo'"
+        ))
+        .expect("filling guest memory");
+    std::thread::sleep(Duration::from_secs(2));
+    let full = guest.balloon_stats().expect("reading the worker's stats");
+    guest
+        .ssh_exec("sudo rm /dev/shm/fill")
+        .expect("freeing guest memory");
+
+    // Reporting waits a couple of seconds after pages free, then reports in pageblock chunks.
+    let freed = wait_for(&guest, Duration::from_secs(60), |s| {
+        full.footprint.saturating_sub(s.footprint) >= fill_mib * MIB * 9 / 10
+    });
+    let fell = full.footprint.saturating_sub(freed.footprint);
+    let log = guest.supervisor_log();
+    let refused = log
+        .lines()
+        .filter(|l| l.contains("release outside guest RAM"))
+        .count();
+    eprintln!(
+        "filled {fill_mib} MiB:\n{filled}\nfootprint {} -> {} MiB (fell {} MiB); released {} -> {} \
+         MiB; {refused} reports refused outside guest RAM",
+        mib(full.footprint),
+        mib(freed.footprint),
+        mib(fell),
+        mib(full.released),
+        mib(freed.released)
+    );
+    assert_eq!(
+        refused, 0,
+        "the worker refused free page reports in the plugged blocks"
+    );
+    assert!(
+        fell >= fill_mib * MIB * 8 / 10,
+        "the worker's footprint fell {} MiB after the guest freed {fill_mib} MiB",
+        mib(fell)
+    );
+
+    // Blocks with released pages in them still unplug, through the release tracker, and the
+    // guest keeps running. A stock guest onlines plugged memory into ZONE_NORMAL, and a fill this
+    // close to full puts kernel objects there, so a few blocks may stay.
+    guest.set_mem_target(0).expect("asking the guest to unplug");
+    let unplugged = wait_for(&guest, Duration::from_secs(60), |s| s.mem_plugged == 0);
+    let after = guest
+        .ssh_exec(
+            "sudo sh -c 'dd if=/dev/zero of=/dev/shm/again bs=1M count=512 2>/dev/null; \
+             rm /dev/shm/again' && echo alive",
+        )
+        .expect("touching guest memory after the unplug");
+    let log = guest.supervisor_log();
+    let failed: Vec<&str> = log
+        .lines()
+        .filter(|l| l.contains("released-ram:") || l.contains("keeps its pages"))
+        .collect();
+    eprintln!(
+        "unplugged to {} MiB; strays {}; heals {}; guest says {}; tracker errors:\n{}",
+        mib(unplugged.mem_plugged),
+        unplugged.strays,
+        unplugged.heals,
+        after.trim(),
+        failed.join("\n")
+    );
+    assert!(
+        unplugged.mem_plugged <= PLUG / 8,
+        "{} MiB of plugged memory would not unplug",
+        mib(unplugged.mem_plugged)
+    );
+    assert!(failed.is_empty(), "the release tracker failed: {failed:?}");
+    assert_eq!(
+        unplugged.strays, 0,
+        "stage-2 faults outside the released set"
+    );
+    assert_eq!(after.trim(), "alive");
+
+    guest
+        .shutdown(Duration::from_secs(15))
+        .expect("shutting down the guest");
+}

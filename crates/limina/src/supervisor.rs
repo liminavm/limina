@@ -93,6 +93,7 @@ pub fn keep_refused_snapshot(snapshot: &std::path::Path, state_file: Option<&std
                 gpu_metal: None,
                 machine: None,
                 mem_layout: None,
+                page_reporting: None,
             });
         if let Err(e) = crate::vmlib::state::set_suspended(state, Some(sus)) {
             log::error!("re-recording the suspended state failed: {e}");
@@ -335,6 +336,10 @@ pub struct WorkerSpec {
     /// Offer a cold-booted guest the Metal-level GPU transport (`--gpu-metal`). Decided per spawn
     /// like [`Self::nested_virt`] ([`gpu_metal_for_spawn`]).
     pub gpu_metal: bool,
+    /// Offer free page reporting whatever the guest has taught (`--balloon-free-page-reporting`).
+    /// Otherwise a cold boot follows what was learned and a resume its record
+    /// (`crate::page_reporting`).
+    pub page_reporting: bool,
     /// The machine a cold-booted guest is described with (`--acpi` for ACPI). Decided per spawn
     /// like [`Self::nested_virt`] ([`machine_for_spawn`]).
     pub machine: Machine,
@@ -787,6 +792,16 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
         args.push("--gpu-metal".into());
     }
     SPAWNED_GPU_METAL.store(gpu_metal, Ordering::SeqCst);
+    let page_reporting = crate::page_reporting::for_spawn(
+        spec.page_reporting,
+        crate::page_reporting::learned(spec.suspend_state_file.as_deref()),
+        resumed,
+        record.as_ref(),
+    );
+    if page_reporting {
+        args.push("--balloon-free-page-reporting".into());
+    }
+    crate::page_reporting::note_spawn(page_reporting, spec.suspend_state_file.as_deref());
     let mem_layout = spec
         .mem
         .layout(resumed.then(|| record.as_ref().and_then(|r| r.mem_layout)));
@@ -1245,6 +1260,7 @@ pub fn run(
             links: spec.links.clone(),
             nested_virt: spec.nested_virt,
             gpu_metal: spec.gpu_metal,
+            page_reporting: spec.page_reporting,
             machine: spec.machine,
             mem: spec.mem.clone(),
         };
@@ -1344,6 +1360,7 @@ mod tests {
             gpu_metal,
             machine: None,
             mem_layout: None,
+            page_reporting: None,
         };
         assert!(gpu_metal_for_spawn(true, false, Some(&rec(Some(false)))));
         assert!(!gpu_metal_for_spawn(true, true, Some(&rec(None))));
@@ -1361,6 +1378,7 @@ mod tests {
             gpu_metal: None,
             machine: None,
             mem_layout: None,
+            page_reporting: None,
         };
         assert!(nested_virt_for_spawn(true, false, None));
         assert!(!nested_virt_for_spawn(false, false, Some(&rec(Some(true)))));
@@ -1383,6 +1401,7 @@ mod tests {
             gpu_metal: None,
             machine,
             mem_layout: None,
+            page_reporting: None,
         };
         assert_eq!(machine_for_spawn(Acpi, false, None), Acpi);
         assert_eq!(
@@ -1469,6 +1488,7 @@ mod tests {
                 gpu_metal: None,
                 machine: None,
                 mem_layout: None,
+                page_reporting: None,
             }),
         )
         .unwrap();
@@ -1537,6 +1557,7 @@ mod tests {
             gpu_metal: None,
             machine: None,
             mem_layout: None,
+            page_reporting: None,
         };
         crate::vmlib::state::set_suspended(&state, Some(rec.clone())).unwrap();
         take_pending_resume(&snap, Some(&state)).expect("a pending resume");
@@ -1563,6 +1584,7 @@ mod tests {
                 gpu_metal: None,
                 machine: None,
                 mem_layout: None,
+                page_reporting: None,
             }),
         )
         .unwrap();

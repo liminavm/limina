@@ -78,6 +78,10 @@ pub struct VmState {
     /// again after one that ran long without binding it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtio_mem: Option<bool>,
+    /// Whether the guest's kernel takes free page reporting safely (`crate::page_reporting`),
+    /// from the kernel release its agent last named. `None` until an agent has answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_reporting: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -161,6 +165,11 @@ pub struct Suspended {
     /// record written before it was kept, when every VM took all its RAM up front.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mem_layout: Option<crate::elastic_mem::MemLayout>,
+    /// Whether the guest was offered free page reporting (`crate::page_reporting`). It negotiated
+    /// the balloon's features before it was saved, so the resume follows this, whatever has been
+    /// learned since. `None` in a record written before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_reporting: Option<bool>,
 }
 
 /// Load the state file. Missing, unreadable, or corrupt → `None` (state is
@@ -281,6 +290,16 @@ pub fn set_virtio_mem(path: &Path, bound: Option<bool>) -> std::io::Result<()> {
     save(path, &state)
 }
 
+/// Merge-save whether the guest's kernel takes free page reporting, leaving everything else alone.
+pub fn set_page_reporting(path: &Path, safe: Option<bool>) -> std::io::Result<()> {
+    let mut state = load(path).unwrap_or_default();
+    if state.page_reporting == safe {
+        return Ok(());
+    }
+    state.page_reporting = safe;
+    save(path, &state)
+}
+
 /// Atomic save (tmp + rename, the `VmBundle::save` pattern). Best-effort at the
 /// call sites — losing a window-placement save is not worth failing anything.
 pub fn save(path: &Path, state: &VmState) -> std::io::Result<()> {
@@ -329,6 +348,7 @@ mod tests {
             guest_taps: None,
             tap_drag: None,
             virtio_mem: None,
+            page_reporting: None,
         };
         save(&path, &state).unwrap();
         assert_eq!(load(&path), Some(state));
@@ -360,6 +380,7 @@ mod tests {
             guest_taps: None,
             tap_drag: None,
             virtio_mem: None,
+            page_reporting: None,
         };
         save(&path, &state).expect("a top-bit identity key must be persistable");
         assert_eq!(load(&path), Some(state));
@@ -432,6 +453,7 @@ mod tests {
                 guest_taps: None,
                 tap_drag: None,
                 virtio_mem: None,
+                page_reporting: None,
             },
         )
         .unwrap();
@@ -446,6 +468,7 @@ mod tests {
                 gpu_metal: None,
                 machine: None,
                 mem_layout: None,
+                page_reporting: None,
             }),
         )
         .unwrap();
@@ -460,6 +483,7 @@ mod tests {
                 gpu_metal: None,
                 machine: None,
                 mem_layout: None,
+                page_reporting: None,
             })
         );
         // Clear it — window still preserved.
@@ -633,6 +657,7 @@ mod tests {
                 gpu_metal: None,
                 machine: None,
                 mem_layout: None,
+                page_reporting: None,
             }),
         )
         .unwrap();
@@ -653,6 +678,7 @@ mod tests {
                 gpu_metal: None,
                 machine: None,
                 mem_layout: None,
+                page_reporting: None,
             }),
             "suspend record survives a window save"
         );
@@ -676,6 +702,7 @@ mod tests {
             gpu_metal: None,
             machine: None,
             mem_layout: None,
+            page_reporting: None,
         };
         set_suspended(&path, Some(rec.clone())).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();

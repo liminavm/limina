@@ -28,7 +28,7 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "b3195ea1cc1c4837130774e206de3fd4eaafb343"
+rev = "259764f0dc2fb0c3f9146a905059600d46cb05e3"
 base = "a0375321bb1e6e51312e022af53e9e7668d3a07e"
 
 # Cardea: the guest's UEFI firmware, ours outright (Rust, MIT), docs/design/firmware-and-acpi.md.
