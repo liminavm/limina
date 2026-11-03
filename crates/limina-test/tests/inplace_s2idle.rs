@@ -171,6 +171,144 @@ fn stock_guest_survives_inplace_s2idle_with_correct_clock() {
     eprintln!("teardown outcome: {outcome:?}");
 }
 
+/// Whether a kernel release is one `page_reporting` offers free page reporting to: mainline from
+/// 7.2, and 7.1 from 7.1.8, the series these images run. The full table, older stable series
+/// included, is `crates/limina/src/page_reporting.rs`.
+fn takes_page_reporting(release: &str) -> bool {
+    let mut v = release
+        .split(|c: char| !c.is_ascii_digit())
+        .map(|n| n.parse::<u32>().unwrap_or(0));
+    let (major, minor, patch) = (
+        v.next().unwrap_or(0),
+        v.next().unwrap_or(0),
+        v.next().unwrap_or(0),
+    );
+    (major, minor) >= (7, 2) || ((major, minor) == (7, 1) && patch >= 8)
+}
+
+/// A guest offered free page reporting, with reports flowing from RAM and plugged virtio-mem
+/// blocks, suspends to idle and wakes in place. A kernel without upstream 0b45f6927a14 crashes
+/// here (the reporting work outlives `virtballoon_freeze`), which is why `page_reporting` offers
+/// it only to kernels with the fix; this test needs one (`LIMINA_TEST_DISK` at an image that
+/// runs it) and skips otherwise.
+#[test]
+fn a_guest_with_page_reporting_survives_inplace_s2idle() {
+    const NAME: &str = "a_guest_with_page_reporting_survives_inplace_s2idle";
+    if !limina_test::require_hvf_or_skip(NAME) {
+        return;
+    }
+    let cfg = match GuestConfig::fedora_from_env() {
+        Ok(mut cfg) => {
+            cfg.ram_mib = 2048;
+            cfg.with_net()
+                .with_balloon_control()
+                .with_supervisor_log()
+                .with_supervisor_arg("--balloon-free-page-reporting")
+                .with_env("LIMINA_VIRTIO_MEM", "2048")
+        }
+        Err(e) => {
+            eprintln!("SKIPPED {NAME}: {e}");
+            return;
+        }
+    };
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    guest
+        .wait_for_ssh(Duration::from_secs(240))
+        .expect("guest sshd never became reachable");
+    let kernel = ssh_retry(&guest, "uname -r").trim().to_string();
+    if !takes_page_reporting(&kernel) {
+        eprintln!("SKIPPED {NAME}: the guest runs {kernel}, which lacks the page reporting fix");
+        let _ = guest.shutdown(Duration::from_secs(20));
+        return;
+    }
+    let features = ssh_retry(
+        &guest,
+        "cat /sys/bus/virtio/drivers/virtio_balloon/virtio*/features",
+    );
+    assert_eq!(
+        features.trim().chars().nth(5),
+        Some('1'),
+        "the guest did not negotiate free page reporting: {features}"
+    );
+
+    guest
+        .set_mem_target(1 << 30)
+        .expect("asking the guest to plug");
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while guest.balloon_stats().expect("reading stats").mem_plugged < 1 << 30 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the guest never plugged 1 GiB"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    // Fill and free most of the guest's memory, so reports are in flight as it suspends.
+    ssh_retry(
+        &guest,
+        "sudo sh -c 'avail=$(awk \"/^MemAvailable:/ {print int(\\$2 / 1024)}\" /proc/meminfo); \
+         mount -o remount,size=$((avail - 384))m /dev/shm; \
+         dd if=/dev/zero of=/dev/shm/fill bs=1M count=$((avail - 384)) 2>/dev/null; \
+         rm /dev/shm/fill'; echo filled",
+    );
+    let boot_id = ssh_retry(&guest, "cat /proc/sys/kernel/random/boot_id")
+        .trim()
+        .to_string();
+    let worker = guest.worker_pid().expect("resolving the worker pid");
+    let launch = guest
+        .current_launch()
+        .expect("the boot printed no identity block");
+
+    suspend_in_guest_and_wait_dark(&guest);
+    std::thread::sleep(Duration::from_secs(5));
+    let ret = unsafe { libc::kill(worker, libc::SIGWINCH) };
+    assert_eq!(
+        ret, 0,
+        "SIGWINCH to the worker failed — did the worker die?"
+    );
+    guest
+        .ssh_poll("true", Duration::from_secs(90))
+        .expect("guest never came back on SSH after the wake pulse");
+    // The use-after-free shows a little after the thaw, in the reporting work's next run.
+    std::thread::sleep(Duration::from_secs(10));
+    ssh_retry(
+        &guest,
+        "sudo sh -c 'dd if=/dev/zero of=/dev/shm/again bs=1M count=512 2>/dev/null; \
+         rm /dev/shm/again'",
+    );
+    std::thread::sleep(Duration::from_secs(5));
+
+    let boot_id_after = ssh_retry(&guest, "cat /proc/sys/kernel/random/boot_id")
+        .trim()
+        .to_string();
+    let oops = guest
+        .ssh_exec("sudo dmesg | grep -E 'BUG:|Oops|Unable to handle|KASAN|page_reporting' || true")
+        .unwrap_or_default();
+    let stats = guest.balloon_stats().expect("reading stats");
+    eprintln!(
+        "{kernel}: woke with boot_id {}, released {} MiB, strays {}; kernel complaints:\n{oops}",
+        if boot_id_after == boot_id {
+            "kept"
+        } else {
+            "CHANGED"
+        },
+        stats.released >> 20,
+        stats.strays
+    );
+    assert_eq!(boot_id_after, boot_id, "the guest rebooted across s2idle");
+    guest
+        .assert_same_launch(&launch)
+        .expect("this test must be in-place");
+    assert!(
+        !oops.contains("BUG:") && !oops.contains("Oops") && !oops.contains("Unable to handle"),
+        "the guest kernel complained across s2idle:\n{oops}"
+    );
+    assert_eq!(stats.strays, 0, "stage-2 faults outside the released set");
+
+    guest
+        .shutdown(Duration::from_secs(20))
+        .expect("shutting down the woken guest");
+}
+
 // ---- USB across suspend/resume (docs/design/usb-xhci-snapshot/) -------------------------
 
 /// The live USB probe (`guest/usbprobe.py`): reports `devnum` from sysfs *and* issues a real

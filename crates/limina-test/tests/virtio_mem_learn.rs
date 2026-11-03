@@ -7,6 +7,9 @@
 //! The first boot takes all of its RAM up front, beside a small virtio-mem region it is never
 //! asked to plug; once the stock guest binds the device, `state.toml` records it. After a stop,
 //! the next boot splits: the guest comes up on its minimum and plugs the region it is asked for.
+//! The same boots teach free page reporting (`page_reporting`): the first is not offered it, its
+//! guest agent names its kernel, which does or does not take it, and the second negotiates it
+//! exactly when it does. Which kernels take it is `page_reporting`'s unit tests' business.
 //! Driven through the real `limina create/start/stop` verbs, like `vmdef.rs`.
 
 use std::path::Path;
@@ -63,6 +66,12 @@ fn wait_until(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
     false
 }
 
+/// Whether the guest's balloon driver negotiated `VIRTIO_BALLOON_F_REPORTING` (bit 5).
+fn reporting_negotiated() -> Option<bool> {
+    let bits = ssh_exec("cat /sys/bus/virtio/drivers/virtio_balloon/virtio*/features")?;
+    Some(bits.chars().nth(5)? == '1')
+}
+
 fn mem_total() -> Option<u64> {
     ssh_exec("awk '/^MemTotal:/ {print $2 * 1024}' /proc/meminfo")?
         .parse()
@@ -98,6 +107,16 @@ fn a_managed_vm_learns_virtio_mem_and_splits_its_next_boot() {
             .unwrap_or_default()
             .lines()
             .any(|l| l.trim() == "virtio_mem = true")
+    };
+    let learned_reporting = || {
+        std::fs::read_to_string(&state_toml)
+            .unwrap_or_default()
+            .lines()
+            .find_map(|l| match l.trim() {
+                "page_reporting = true" => Some(true),
+                "page_reporting = false" => Some(false),
+                _ => None,
+            })
     };
     let start = |log: &Path| {
         let log = std::fs::File::create(log).expect("creating a start log");
@@ -138,12 +157,26 @@ fn a_managed_vm_learns_virtio_mem_and_splits_its_next_boot() {
         "the first boot never reached SSH"
     );
     let total1 = mem_total().expect("reading MemTotal");
+    assert_eq!(
+        reporting_negotiated(),
+        Some(false),
+        "a VM that has learned nothing was offered free page reporting"
+    );
     assert!(
         wait_until(Duration::from_secs(90), learned),
         "the guest never taught the VM it drives virtio-mem:\n{}\n{}",
         std::fs::read_to_string(&state_toml).unwrap_or_default(),
         std::fs::read_to_string(&log1).unwrap_or_default()
     );
+    let kernel = ssh_exec("uname -r").unwrap_or_default();
+    assert!(
+        wait_until(Duration::from_secs(90), || learned_reporting().is_some()),
+        "the guest agent never taught the VM whether kernel {kernel} takes page reporting:\n{}\n{}",
+        std::fs::read_to_string(&state_toml).unwrap_or_default(),
+        std::fs::read_to_string(&log1).unwrap_or_default()
+    );
+    let takes_reporting = learned_reporting().unwrap();
+    eprintln!("kernel {kernel}: page_reporting = {takes_reporting}");
     stop(&mut boot1);
     let text1 = std::fs::read_to_string(&log1).unwrap_or_default();
     assert!(
@@ -180,6 +213,11 @@ fn a_managed_vm_learns_virtio_mem_and_splits_its_next_boot() {
         "the split guest has {} MiB (the whole boot had {} MiB): it did not plug its region",
         total2 / MIB,
         total1 / MIB
+    );
+    assert_eq!(
+        reporting_negotiated(),
+        Some(takes_reporting),
+        "the boot after the guest named kernel {kernel} did not follow what it taught"
     );
     stop(&mut boot2);
     let _ = std::fs::remove_dir_all(&scratch);
