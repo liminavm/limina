@@ -63,6 +63,14 @@ pub static PRESENT_COPY_TRACE: Lever = Lever::new(
     "LIMINA_PRESENT_COPY_TRACE",
     "frame copies: first pixel as a frame arrives and as its copy goes up (logged at info)",
 );
+/// The memory trace (the worker's `memory_trace`): this lever is forwarded to the worker, and
+/// every worker started while it is on starts tracing (`worker_memory_trace`).
+pub static MEMORY_TRACE: Lever = Lever::new(
+    "memory-trace",
+    "LIMINA_MEMORY_TRACE",
+    "memory: periodic reports of what holds the worker's memory, and which Rust call sites keep \
+     their allocations (sampled)",
+);
 /// Records every input the trackpad policy reads (`window::input`'s recorder): to
 /// `LIMINA_TRACKPAD_RECORD`'s file when that names one, otherwise a new file beside the log.
 pub static TRACKPAD_RECORD: Lever = Lever::new(
@@ -125,6 +133,7 @@ pub static LEVERS: &[&Lever] = &[
     &OVERLAY_TRACE,
     &QGA_TRACE,
     &PRESENT_COPY_TRACE,
+    &MEMORY_TRACE,
     &TRACKPAD_RECORD,
     &INPUT_INJECT,
     &DEBUG_PORT,
@@ -163,6 +172,9 @@ pub(crate) static ACCESS_LEVER_TESTS: Mutex<()> = Mutex::new(());
 
 /// How long a forwarded request waits for the worker's answer.
 const WORKER_TIMEOUT: Duration = Duration::from_secs(2);
+/// A memory report walks every region of a worker holding tens of thousands, and names the
+/// census's samples: seconds, not milliseconds.
+const MEMORY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The worker's debug link, once `run_vm` has made one.
 static WORKER: Mutex<Option<Endpoint>> = Mutex::new(None);
@@ -188,6 +200,12 @@ pub fn set_worker_link(endpoint: Endpoint) {
     *lock(&WORKER) = Some(endpoint);
 }
 
+/// The `LIMINA_MEMORY_TRACE` a newly spawned worker gets: always spelled out, so a lever turned
+/// off at runtime is not turned back on by the variable the supervisor started with.
+pub fn worker_memory_trace() -> &'static str {
+    if MEMORY_TRACE.on() { "1" } else { "0" }
+}
+
 /// The `RUST_LOG` a newly spawned worker gets, when the filter was changed at runtime.
 pub fn worker_rust_log() -> Option<String> {
     lock(&WORKER_FILTER).clone()
@@ -197,6 +215,7 @@ pub fn worker_rust_log() -> Option<String> {
 pub fn handle(req: &Request) -> Result<Vec<String>, String> {
     match req {
         Request::Status => Ok(status()),
+        Request::Memory => Ok(memory()),
         Request::Log { scope, spec } => set_log(*scope, spec),
         Request::Lever { name, on } => {
             let l = lever::find(LEVERS, name).ok_or_else(|| {
@@ -215,6 +234,16 @@ pub fn handle(req: &Request) -> Result<Vec<String>, String> {
             }
             if std::ptr::eq(l, &NO_THROTTLE) {
                 crate::no_throttle::reconcile();
+            }
+            if std::ptr::eq(l, &MEMORY_TRACE) {
+                // The worker runs the trace. Not reaching it is not a failure: the next worker
+                // starts from the lever (`worker_memory_trace`).
+                if let Err(why) = ask_worker(&Request::Lever {
+                    name: l.name().into(),
+                    on: *on,
+                }) {
+                    log::warn!("debug: memory-trace not forwarded to the worker ({why})");
+                }
             }
             log::warn!(
                 "debug: lever {} is now {}",
@@ -265,6 +294,19 @@ fn status() -> Vec<String> {
     lines
 }
 
+/// Both processes' memory: this one's, then the worker's (which names the GPU host's too).
+fn memory() -> Vec<String> {
+    let mut lines: Vec<String> = limina_debug::memstat::report()
+        .into_iter()
+        .map(|l| format!("supervisor {l}"))
+        .collect();
+    match ask_worker_within(&Request::Memory, MEMORY_TIMEOUT) {
+        Ok(reply) => lines.extend(reply.into_iter().map(|l| format!("worker {l}"))),
+        Err(why) => lines.push(format!("worker unavailable ({why})")),
+    }
+    lines
+}
+
 fn set_log(scope: Scope, spec: &str) -> Result<Vec<String>, String> {
     // Validate once, before touching either process, so a typo cannot leave the two halves
     // disagreeing.
@@ -305,12 +347,16 @@ fn set_log(scope: Scope, spec: &str) -> Result<Vec<String>, String> {
 
 /// Send one request to the worker and read its answer.
 fn ask_worker(req: &Request) -> Result<Vec<String>, String> {
+    ask_worker_within(req, WORKER_TIMEOUT)
+}
+
+fn ask_worker_within(req: &Request, timeout: Duration) -> Result<Vec<String>, String> {
     let endpoint = lock(&WORKER)
         .clone()
         .ok_or("this VM's worker has no debug link")?;
     let stream = endpoint.connect().map_err(|e| e.to_string())?;
-    let _ = stream.set_read_timeout(Some(WORKER_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(WORKER_TIMEOUT));
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
     (&stream)
         .write_all(format!("{}\n", req.to_line()).as_bytes())
         .map_err(|e| e.to_string())?;
@@ -395,7 +441,10 @@ pub fn client(pid: u32, requests: &[Request]) -> Result<()> {
     })?;
     // Status asks the worker too, which can take up to its own timeout; a capture stop waits for
     // the frames already copied to be written.
-    let timeout = if requests.iter().any(|r| matches!(r, Request::Capture(_))) {
+    let timeout = if requests
+        .iter()
+        .any(|r| matches!(r, Request::Capture(_) | Request::Memory))
+    {
         Duration::from_secs(60)
     } else {
         WORKER_TIMEOUT * 3

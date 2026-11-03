@@ -30,6 +30,12 @@ static LIVE: Mutex<Weak<GpuHostExtension>> = Mutex::new(Weak::new());
 /// The contexts `limina debug <vm> status` lists, those holding the most objects.
 const STATUS_CONTEXTS: usize = 8;
 
+/// The GPU host's pid, while there is one, for the memory report to read its footprint.
+pub fn gpu_host_pid() -> Option<i32> {
+    let ext = LIVE.lock().unwrap_or_else(|e| e.into_inner()).upgrade()?;
+    Some(ext.host.pid())
+}
+
 /// What the GPU host holds and what it costs, as `limina debug <vm> status` shows it: a line for
 /// the whole, then one for each of the contexts holding the most objects. Empty without one.
 pub fn status_lines() -> Vec<String> {

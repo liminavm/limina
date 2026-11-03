@@ -27,10 +27,15 @@
 //! > capture still main /tmp/now.png
 //! < {"format":1,"still":true,"slot":0,"flip":287,…}
 //! < ok
+//! > memory
+//! < supervisor task footprint=… compressed=… …
+//! < worker task footprint=… compressed=… …
+//! < ok
 //! ```
 //!
-//! The supervisor speaks the same protocol to its worker, where only `log` means anything (the
-//! scope is then ignored: the worker has one filter).
+//! The supervisor speaks the same protocol to its worker, where `log`, `memory` and the
+//! `memory-trace` lever mean something (a `log` scope is then ignored: the worker has one
+//! filter).
 
 /// Which process a `log` request is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +86,9 @@ pub enum Request {
     /// against the SUPERVISOR's working directory, not the client's; `limina debug` makes it
     /// absolute before sending.
     Capture(Capture),
+    /// One memory report (`crate::memstat`): what each process's memory is, by kind, and what
+    /// the allocation census has seen while the `memory-trace` lever was on.
+    Memory,
 }
 
 /// What a capture writes for each frame it records. Every mode records every frame's tag and
@@ -143,6 +151,10 @@ impl Request {
         let mut words = line.split_whitespace();
         match words.next() {
             Some("status") => Ok(Request::Status),
+            Some("memory") => match words.next() {
+                None => Ok(Request::Memory),
+                Some(extra) => Err(format!("unexpected {extra:?} after memory")),
+            },
             Some("log") => {
                 let scope = words.next().ok_or("log needs a scope and a filter")?;
                 let scope = Scope::parse(scope)
@@ -240,6 +252,7 @@ impl Request {
     pub fn to_line(&self) -> String {
         match self {
             Request::Status => "status".into(),
+            Request::Memory => "memory".into(),
             Request::Log { scope, spec } => format!("log {} {spec}", scope.as_str()),
             Request::Lever { name, on } => {
                 format!("lever {name} {}", if *on { "on" } else { "off" })
@@ -295,6 +308,7 @@ mod tests {
     fn requests_round_trip() {
         for r in [
             Request::Status,
+            Request::Memory,
             Request::Log {
                 scope: Scope::All,
                 spec: "warn,limina::window=debug".into(),
@@ -347,6 +361,7 @@ mod tests {
         assert!(Request::parse("lever edge-trace").is_err());
         assert!(Request::parse("lever edge-trace maybe").is_err());
         assert!(Request::parse("reboot").is_err());
+        assert!(Request::parse("memory now").is_err());
         assert!(Request::parse("capture").is_err());
         assert_eq!(
             Request::parse("capture start --mode images /tmp/x"),

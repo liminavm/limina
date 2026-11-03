@@ -17,6 +17,7 @@ mod config;
 mod debug_link;
 mod fido_usb;
 mod krun;
+mod memory_trace;
 mod moc_usb;
 mod pipeline_cache_key;
 mod power;
@@ -31,6 +32,10 @@ mod suspend;
 mod usb_kbd;
 mod video_state;
 mod wake;
+
+/// The system allocator, plus the census the `memory-trace` lever turns on (`memory_trace`).
+#[global_allocator]
+static ALLOC: limina_debug::alloc_census::Census = limina_debug::alloc_census::Census;
 
 use std::net::SocketAddrV4;
 use std::path::PathBuf;
@@ -1030,6 +1035,7 @@ fn main() -> Result<()> {
     };
 
     // After every `set_var` above: from here on another thread is running.
+    memory_trace::start();
     if let Some(fd) = cli.debug_control_fd {
         debug_link::install(ListenAt::Link(fd))?;
     }

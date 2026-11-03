@@ -701,6 +701,11 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     if let Some(filter) = crate::debug_ctl::worker_rust_log() {
         env.push(("RUST_LOG".into(), filter.into()));
     }
+    // Likewise the memory trace: a lever flipped at runtime holds across a reboot or a resume.
+    env.push((
+        "LIMINA_MEMORY_TRACE".into(),
+        crate::debug_ctl::worker_memory_trace().into(),
+    ));
 
     let (spice_host, spice_worker) = socketpair(libc::SOCK_STREAM)?;
     args.push("--spice-fd".into());

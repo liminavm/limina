@@ -5,9 +5,9 @@
 //!
 //! The supervisor owns the user-facing socket (`limina debug`, the Debug menu) and forwards what
 //! is meant for the worker over a link (`--debug-control-fd`), in the same line protocol
-//! (`limina_debug::wire`). Only `log` and `status` mean anything here (a status also carries the
-//! GPU host's stats, when there is one); the worker's diagnostic
-//! levers live inside libkrun and are not switchable yet.
+//! (`limina_debug::wire`). `log`, `status` (which also carries the GPU host's stats, when there
+//! is one), `memory` and the `memory-trace` lever mean something here; the worker's other
+//! diagnostic levers live inside libkrun and are not switchable yet.
 //!
 //! A replacement worker (a guest reboot, a resume) starts from the filter the supervisor last
 //! set, through its `RUST_LOG` — not by being told again here.
@@ -74,10 +74,22 @@ fn answer(line: &str) -> String {
             }
             Err(e) => format!("{}\n", wire::err_line(&e)),
         },
+        Ok(Request::Lever { name, on }) if name == crate::memory_trace::MEMORY_TRACE.name() => {
+            crate::memory_trace::set(on);
+            format!("{}\n", wire::OK)
+        }
         Ok(Request::Lever { name, .. }) => format!(
             "{}\n",
             wire::err_line(&format!("the worker has no lever named {name}"))
         ),
+        Ok(Request::Memory) => {
+            let mut lines = String::new();
+            for l in crate::memory_trace::report() {
+                lines += &l;
+                lines += "\n";
+            }
+            lines + wire::OK + "\n"
+        }
         Ok(Request::Capture(_)) => format!(
             "{}\n",
             wire::err_line("frame capture is the supervisor's: it captures what its windows show")

@@ -717,6 +717,10 @@ enum DebugAction {
         #[arg(long)]
         worker: bool,
     },
+    /// What holds the supervisor's and the worker's memory, by kind, without suspending either
+    /// (vmmap does): the task ledger, the malloc zones, the address space by region kind, the GPU
+    /// host's footprint, and — while the `memory-trace` lever is on — the allocation census.
+    Memory,
     /// Turn a lever on or off: a diagnostic trace, or harness access (`input-inject`,
     /// `debug-port`). `status` lists them.
     Lever { name: String, state: OnOff },
@@ -1477,6 +1481,7 @@ fn cmd_debug(args: DebugArgs) -> Result<()> {
     let pid = debug_target_pid(&args.vm)?;
     let request = match args.action.unwrap_or(DebugAction::Status) {
         DebugAction::Status => limina_debug::wire::Request::Status,
+        DebugAction::Memory => limina_debug::wire::Request::Memory,
         DebugAction::Log {
             filter,
             supervisor,

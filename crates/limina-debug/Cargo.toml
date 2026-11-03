@@ -10,3 +10,9 @@ license.workspace = true
 env_filter = { workspace = true }
 env_logger = { workspace = true }
 log        = { workspace = true }
+
+# The memory report reads this process from the inside (mach, malloc, dyld), and the census
+# names the code its sampled allocations came from.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc           = { workspace = true }
+rustc-demangle = "0.1.28"
