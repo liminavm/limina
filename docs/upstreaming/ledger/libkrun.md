@@ -4,11 +4,11 @@
 126 patches audited (at base `07a3f40973ce`). Schema + protocol: `README.md`.
 Rows are keyed by SUBJECT; ordinals refer to the retired `patches/libkrun/` series.
 
-**Current state (2026-11-02):** `liminavm/libkrun` branch `limina` is pinned at
-`b3195ea1` on upstream base `a0375321` (`third_party/manifest.toml`): 347 commits in
-`a0375321..b3195ea1`. Of those, 147 have a row in the two tables below and 198 only a skeleton
+**Current state (2026-11-04):** `liminavm/libkrun` branch `limina` is pinned at
+`259764f0` on upstream base `a0375321` (`third_party/manifest.toml`): 348 commits in
+`a0375321..259764f0`. Of those, 148 have a row in the two tables below and 198 only a skeleton
 row under *Unaudited commits* at the end of this file; the remaining two are 0043, whose subject
-was reworded, and `b3195ea1`, the newest, which has a skeleton row of its own. Every `checked`
+was reworded, and `b3195ea1`, which has a skeleton row of its own. Every `checked`
 cell records a verdict made against
 upstream `c652b56` (2026-08-03). Since then upstream has removed the old C API (`a3d31822`),
 merged the VMM crate into libkrun (`fe3bec59`) and replaced the in-tree `rutabaga_gfx` with the
@@ -692,6 +692,7 @@ the commit messages, not researched against upstream.
 | `8fdd68bb` | virtio/mem: add a virtio-mem device over owned memory blocks | `src/devices/src/virtio/mem/device.rs`, `src/devices/src/virtio/mem/plug.rs`, `src/libkrun/src/vmm/builder.rs` +10 |  | upstream-after-cleanup — a general device libkrun lacks (no macOS VMM has one); the region placement and `DeviceRequirements::hotplug_ram` are generic, the owned-block backing rides the guest_ram commit. sec: no — guest requests are range-checked against the region before any stage-2 change. |
 | `eefeb961` | vmm: carry virtio-mem's plugged blocks across a snapshot | `src/libkrun/src/vmm/snapshot.rs`, `src/devices/src/virtio/mem/device.rs`, `src/libkrun/src/vmm/builder.rs` +4 |  | upstream-with-device — rides the limina snapshot format (v12) and the virtio-mem device; the region placement fix belongs with the device. sec: no — restore validates every plugged run against the region before applying it. |
 | `88ceea1d` | virtio/net: let a vmnet interface ask for its subnet | `src/devices/src/virtio/net/vmnet.rs`, `src/libkrun/src/api/device_builders.rs` |  | upstream-after-cleanup — rides cacf4d77; the C API would take the subnet as a new `krun_add_net_vmnet` argument or a setter. sec: no |
+| `259764f0` | hvf: release free pages of virtio-mem's plugged blocks | `src/hvf/src/released_ram.rs`, `src/devices/src/virtio/mem/device.rs`, `src/libkrun/src/vmm/builder.rs` +1 |  | carry — rides the limina `ReleasedRam` and the virtio-mem device (`8fdd68bb`): free page reports inside the hotplug region release its owned blocks, and an unplug goes through the tracker so it forgets the ranges released inside it. sec: no — an unplug is checked to be whole owned blocks of one region before any stage-2 change. |
 
 ## Unaudited commits (skeleton, 2026-11-02)
 
