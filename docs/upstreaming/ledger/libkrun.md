@@ -5,8 +5,8 @@
 Rows are keyed by SUBJECT; ordinals refer to the retired `patches/libkrun/` series.
 
 **Current state (2026-11-04):** `liminavm/libkrun` branch `limina` is pinned at
-`259764f0` on upstream base `a0375321` (`third_party/manifest.toml`): 348 commits in
-`a0375321..259764f0`. Of those, 148 have a row in the two tables below and 198 only a skeleton
+`586668e3` on upstream base `a0375321` (`third_party/manifest.toml`): 349 commits in
+`a0375321..586668e3`. Of those, 149 have a row in the two tables below and 198 only a skeleton
 row under *Unaudited commits* at the end of this file; the remaining two are 0043, whose subject
 was reworded, and `b3195ea1`, which has a skeleton row of its own. Every `checked`
 cell records a verdict made against
@@ -693,6 +693,7 @@ the commit messages, not researched against upstream.
 | `eefeb961` | vmm: carry virtio-mem's plugged blocks across a snapshot | `src/libkrun/src/vmm/snapshot.rs`, `src/devices/src/virtio/mem/device.rs`, `src/libkrun/src/vmm/builder.rs` +4 |  | upstream-with-device — rides the limina snapshot format (v12) and the virtio-mem device; the region placement fix belongs with the device. sec: no — restore validates every plugged run against the region before applying it. |
 | `88ceea1d` | virtio/net: let a vmnet interface ask for its subnet | `src/devices/src/virtio/net/vmnet.rs`, `src/libkrun/src/api/device_builders.rs` |  | upstream-after-cleanup — rides cacf4d77; the C API would take the subnet as a new `krun_add_net_vmnet` argument or a setter. sec: no |
 | `259764f0` | hvf: release free pages of virtio-mem's plugged blocks | `src/hvf/src/released_ram.rs`, `src/devices/src/virtio/mem/device.rs`, `src/libkrun/src/vmm/builder.rs` +1 |  | carry — rides the limina `ReleasedRam` and the virtio-mem device (`8fdd68bb`): free page reports inside the hotplug region release its owned blocks, and an unplug goes through the tracker so it forgets the ranges released inside it. sec: no — an unplug is checked to be whole owned blocks of one region before any stage-2 change. |
+| `586668e3` | virtio/i2c: answer the SBS battery's time registers in every state | `src/devices/src/virtio/i2c/device.rs` |  | carry — rides the SBS battery (0042): the time registers answer the spec's 0xffff instead of NAKing, which failed every power_supply uevent in the guest. sec: no — the register file stays read-only and fixed-size. |
 
 ## Unaudited commits (skeleton, 2026-11-02)
 

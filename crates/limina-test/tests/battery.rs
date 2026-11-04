@@ -12,7 +12,10 @@
 //!
 //! RED without any link of that chain: no FDT node → the modules never load; no SBS register
 //! file → sbs-battery's probe read of BatteryStatus fails; wrong register encoding → the
-//! values below don't match. Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
+//! values below don't match. A register that NAKs fails every property read through
+//! `power_supply_uevent`, so each state also reads the whole `uevent`: udev's change events,
+//! `udevadm trigger` in package scriptlets and UPower all go through it. Gated behind
+//! LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
 use std::time::Duration;
 
@@ -79,10 +82,57 @@ fn host_battery_mirrors_into_the_guest_as_a_power_supply() {
     assert_eq!(read("manufacturer"), "Limina", "ManufacturerName (0x20)");
     assert_eq!(read("model_name"), "Host Battery", "DeviceName (0x21)");
     assert_eq!(read("technology"), "Li-ion", "DeviceChemistry (0x22)");
+    assert_uevent_reads(&guest, "POWER_SUPPLY_CAPACITY=73");
     eprintln!("guest power_supply mirrors the fake host battery exactly ✓");
 
     let outcome = guest
         .shutdown(Duration::from_secs(60))
         .expect("supervisor did not stop");
     eprintln!("teardown outcome: {outcome:?}");
+}
+
+/// Plugged in and not charging is the state a Mac on its charger sits in all day; no time
+/// estimate applies, and the battery must still answer every property.
+#[test]
+fn a_host_battery_on_ac_reads_whole_in_the_guest() {
+    if !limina_test::require_hvf_or_skip("a_host_battery_on_ac_reads_whole_in_the_guest") {
+        return;
+    }
+
+    let cfg = GuestConfig::fedora_from_env()
+        .expect("resolving guest config")
+        .with_net()
+        .with_env("LIMINA_BATTERY_FAKE", "64,ac");
+    eprintln!("booting stock Fedora (EFI/BLS) with a fake 64%/on-AC host battery");
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    guest
+        .wait_for_ssh(Duration::from_secs(180))
+        .expect("guest did not reach sshd");
+    guest
+        .ssh_poll(
+            &format!("test -d {PSY} && echo ok"),
+            Duration::from_secs(60),
+        )
+        .expect("the SBS battery power_supply never appeared");
+
+    assert_uevent_reads(&guest, "POWER_SUPPLY_CAPACITY=64");
+    assert_uevent_reads(&guest, "POWER_SUPPLY_STATUS=Not charging");
+    eprintln!("an on-AC battery reads whole ✓");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(60))
+        .expect("supervisor did not stop");
+    eprintln!("teardown outcome: {outcome:?}");
+}
+
+/// Reading `uevent` runs the same property walk as every battery uevent the kernel sends.
+fn assert_uevent_reads(guest: &Guest, expect: &str) {
+    let uevent = guest
+        .ssh_exec(&format!("cat {PSY}/uevent 2>&1; echo rc=$?"))
+        .expect("ssh to the guest");
+    assert!(
+        uevent.contains("rc=0") && uevent.contains(expect),
+        "the battery's uevent did not read whole (a register NAKed?) — wanted {expect}:\n{uevent}"
+    );
 }
