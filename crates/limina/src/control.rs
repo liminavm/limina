@@ -448,6 +448,8 @@ impl ControlPlane {
                     tsync_inner.qga_vcpu_tick();
                     // ...and its dynamic-memory sibling, on the same terms (`qga_mem_tick`).
                     tsync_inner.qga_mem_tick();
+                    // A cold split boot's held region, whichever agent is reporting.
+                    tsync_inner.qga_online_tick();
                     last_awake = std::time::SystemTime::now();
                 }
             })
@@ -1014,6 +1016,35 @@ impl Inner {
                 Some((Instant::now(), report.io_full_avg10));
         }
         policy.on_pressure(&report);
+    }
+
+    /// Have the stock guest agent online hot-added memory into ZONE_MOVABLE, then release the
+    /// region a cold split boot holds (`crate::elastic_mem`).
+    ///
+    /// Fedora's `virt_qemu_ga_t` may write sysfs (`spikes/qga-sysfs-movable/`). The guest runs on
+    /// its RAM alone while the plug is held, so a silent agent is probed every tick rather than
+    /// on the client's slower retry; the hold is bounded, and with it the probing. A write that
+    /// fails is tried again next tick; a guest that never takes it is plugged anyway by the boot
+    /// plug's own watcher, onlined as its kernel defaults.
+    fn qga_online_tick(&self) {
+        if !crate::elastic_mem::boot_plug_pending() {
+            return;
+        }
+        let Some(qga) = self.qga.lock().unwrap().as_ref().map(|s| s.client.clone()) else {
+            return;
+        };
+        qga.probe_soon();
+        match qga.write_file(
+            crate::elastic_mem::AUTO_ONLINE_BLOCKS,
+            crate::elastic_mem::ONLINE_MOVABLE.as_bytes(),
+        ) {
+            Ok(()) => {
+                crate::elastic_mem::release_boot_plug(
+                    "the guest agent set hot-added memory to come online movable",
+                );
+            }
+            Err(e) => log::debug!("qga: cannot set movable onlining yet ({e:#})"),
+        }
     }
 
     /// One tick of the periodic guest trim (`crate::qga::trim`).

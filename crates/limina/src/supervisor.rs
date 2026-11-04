@@ -810,8 +810,13 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     let mem_layout = spec
         .mem
         .layout(resumed.then(|| record.as_ref().and_then(|r| r.mem_layout)));
-    args.extend(spec.mem.worker_args(mem_layout).into_iter().map(Into::into));
-    crate::elastic_mem::note_spawn(&spec.mem, mem_layout);
+    args.extend(
+        spec.mem
+            .worker_args(mem_layout, resumed)
+            .into_iter()
+            .map(Into::into),
+    );
+    crate::elastic_mem::note_spawn(&spec.mem, mem_layout, resumed);
 
     // When running from an assembled limina.app, hand the worker the bundle-relative venus
     // env (KK ICD + zink-on-KK Mesa selectors). In a dev/cargo run no bundle is present, so

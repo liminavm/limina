@@ -880,7 +880,9 @@ impl BalloonPolicy {
         let wstats = self.query_stats(&mut st);
         // A fresh worker starts with nothing reclaimed. A split one plugs its region while the
         // guest comes up, and until it has, `actual` reads as reclaim nobody asked for: wait for
-        // the plug, or [`MEM_SETTLE_WAIT`].
+        // the plug, or [`MEM_SETTLE_WAIT`] after it was asked for. A cold split boot holds the
+        // plug until the guest onlines it movable (`elastic_mem`), and any plug size the policy
+        // sent meanwhile would release it early.
         let spawn = crate::elastic_mem::spawns();
         if st.spawn != spawn {
             st.spawn = spawn;
@@ -891,10 +893,13 @@ impl BalloonPolicy {
             }
         }
         if crate::elastic_mem::spawned().elastic_bytes().is_some() && !st.mem_settled {
+            let Some(asked_at) = crate::elastic_mem::boot_plug_released_at() else {
+                return;
+            };
             let plugged = wstats
                 .as_ref()
                 .is_some_and(|w| w.mem_plugged_bytes >= w.mem_requested_bytes);
-            if !plugged && now.duration_since(st.spawn_at) < MEM_SETTLE_WAIT {
+            if !plugged && now.duration_since(asked_at.max(st.spawn_at)) < MEM_SETTLE_WAIT {
                 return;
             }
             st.mem_settled = true;

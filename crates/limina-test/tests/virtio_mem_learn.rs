@@ -6,7 +6,9 @@
 //!
 //! The first boot takes all of its RAM up front, beside a small virtio-mem region it is never
 //! asked to plug; once the stock guest binds the device, `state.toml` records it. After a stop,
-//! the next boot splits: the guest comes up on its minimum and plugs the region it is asked for.
+//! the next boot splits: the guest comes up on its minimum and plugs the region it is asked for,
+//! into ZONE_MOVABLE: the host plugs it only once the stock guest agent has set movable onlining,
+//! so kernel objects cannot land in it and keep it from unplugging.
 //! The same boots teach free page reporting (`page_reporting`): the first is not offered it, its
 //! guest agent names its kernel, which does or does not take it, and the second negotiates it
 //! exactly when it does. Which kernels take it is `page_reporting`'s unit tests' business.
@@ -70,6 +72,16 @@ fn wait_until(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
 fn reporting_negotiated() -> Option<bool> {
     let bits = ssh_exec("cat /sys/bus/virtio/drivers/virtio_balloon/virtio*/features")?;
     Some(bits.chars().nth(5)? == '1')
+}
+
+/// The pages `zone` spans on the guest's node 0, in bytes; 0 when the zone is empty.
+fn zone_present(zone: &str) -> Option<u64> {
+    let pages: u64 = ssh_exec(&format!(
+        "awk '/^Node 0, zone/ {{z = $4}} z == \"{zone}\" && $1 == \"present\" {{print $2; exit}}' /proc/zoneinfo"
+    ))?
+    .parse()
+    .ok()?;
+    Some(pages * ssh_exec("getconf PAGESIZE")?.parse::<u64>().ok()?)
 }
 
 fn mem_total() -> Option<u64> {
@@ -219,6 +231,26 @@ fn a_managed_vm_learns_virtio_mem_and_splits_its_next_boot() {
         Some(takes_reporting),
         "the boot after the guest named kernel {kernel} did not follow what it taught"
     );
+    let movable = zone_present("Movable").unwrap_or(0);
+    let normal = zone_present("Normal").unwrap_or(0);
+    eprintln!(
+        "zones: Normal {} MiB, Movable {} MiB",
+        normal / MIB,
+        movable / MIB
+    );
+    assert!(
+        movable > 1024 * MIB,
+        "the split guest onlined its plugged memory outside ZONE_MOVABLE (Normal {} MiB, \
+         Movable {} MiB), where kernel objects can keep it from unplugging:\n{}",
+        normal / MIB,
+        movable / MIB,
+        std::fs::read_to_string(&log2).unwrap_or_default()
+    );
     stop(&mut boot2);
+    for line in std::fs::read_to_string(&log2).unwrap_or_default().lines() {
+        if line.contains("memory: ") || line.contains("virtio-mem: ") {
+            eprintln!("boot 2: {line}");
+        }
+    }
     let _ = std::fs::remove_dir_all(&scratch);
 }

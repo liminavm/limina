@@ -148,6 +148,13 @@ impl Qga {
         self.conn.lock().unwrap().state == State::Ready
     }
 
+    /// Let the next call probe a silent port at once instead of after [`PROBE_RETRY`]: for a
+    /// caller waiting on the agent's first answer during boot. A probe of a port with no agent
+    /// costs [`FAST`], so call it only while that wait is worth the cost.
+    pub fn probe_soon(&self) {
+        self.conn.lock().unwrap().retry_at = Instant::now();
+    }
+
     /// What the agent reported it supports, empty until a probe succeeds. See [`Self::ready`]
     /// for why this is a test observer rather than a gate.
     #[allow(dead_code)]

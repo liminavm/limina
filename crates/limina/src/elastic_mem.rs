@@ -12,6 +12,13 @@
 //!   guest plugs as the policy asks. A managed VM boots this way once its guest has bound the
 //!   device, and goes back to `Probe` after a boot that runs [`FORGET_AFTER`] without binding it.
 //!
+//! A cold `Split` boot holds the region unplugged until the guest onlines hot-added memory into
+//! ZONE_MOVABLE, where no kernel object can keep a block from unplugging. A stock guest's
+//! `qemu-guest-agent` may write `auto_online_blocks` (`spikes/qga-sysfs-movable/`), so the control
+//! plane writes it there and then releases the plug ([`release_boot_plug`]). A guest that has not
+//! done so [`BOUND_GRACE`] after it binds the device gets the plug anyway, onlined as its kernel
+//! defaults, which on Fedora is ZONE_NORMAL.
+//!
 //! A resume takes the layout the guest was suspended with, whatever has been learned since: the
 //! guest's memory map is part of the snapshot. A flat run keeps no state, so it learns nothing
 //! and boots `Whole`.
@@ -36,6 +43,9 @@ const PROBE_MIB: u64 = UNIT_MIB;
 /// which for a stock guest is after the initramfs: unlocking a LUKS2 root there takes up to 1 GiB
 /// for argon2id by default, and a 1 GiB guest cannot unlock it.
 const BOOT_FLOOR_MIB: u64 = 2048;
+/// RAM is at least this share of `max`. With the region movable, every kernel allocation lives in
+/// RAM, the region's own `struct page` array among them: 1/64 of the region on a 4 KiB guest.
+const RAM_SHARE_OF_MAX: u64 = 8;
 /// The device's block, and what a requested size is rounded to.
 pub const BLOCK_BYTES: u64 = 2 << 20;
 /// How long a boot may run without the guest binding the device before the learner stops
@@ -53,10 +63,12 @@ pub enum MemLayout {
 }
 
 impl MemLayout {
-    /// RAM at `min_mib`, but at least [`BOOT_FLOOR_MIB`], and raised so the region is whole
-    /// memory blocks; `Whole` when that leaves no region.
+    /// RAM at `min_mib`, but at least [`BOOT_FLOOR_MIB`] and an eighth of `max_mib`, and raised
+    /// so the region is whole memory blocks; `Whole` when that leaves no region.
     pub fn split(min_mib: u64, max_mib: u64) -> MemLayout {
-        let ram_mib = min_mib.max(BOOT_FLOOR_MIB);
+        let ram_mib = min_mib
+            .max(BOOT_FLOOR_MIB)
+            .max(max_mib.div_ceil(RAM_SHARE_OF_MAX));
         let region_mib = max_mib.saturating_sub(ram_mib) / UNIT_MIB * UNIT_MIB;
         if region_mib == 0 {
             MemLayout::Whole
@@ -122,15 +134,23 @@ impl MemSpec {
         )
     }
 
+    /// Whether a spawn with `layout` holds its region unplugged until the guest onlines it
+    /// movable: a cold `Split` boot whose plug the supervisor can release later. A resumed guest
+    /// keeps the blocks and the onlining it was suspended with.
+    fn defers_boot_plug(&self, layout: MemLayout, resumed: bool) -> bool {
+        matches!(layout, MemLayout::Split { .. }) && !resumed && self.socket.is_some()
+    }
+
     /// The worker's flags for `layout`.
-    pub fn worker_args(&self, layout: MemLayout) -> Vec<String> {
+    pub fn worker_args(&self, layout: MemLayout, resumed: bool) -> Vec<String> {
+        let deferred = self.defers_boot_plug(layout, resumed);
         let (ram_mib, region_mib, requested_mib) = match layout {
             MemLayout::Whole => (self.ram_mib, self.fixed_region_mib, None),
             MemLayout::Probe => (self.ram_mib, Some(PROBE_MIB), None),
             MemLayout::Split {
                 ram_mib,
                 region_mib,
-            } => (ram_mib, Some(region_mib), Some(region_mib)),
+            } => (ram_mib, Some(region_mib), (!deferred).then_some(region_mib)),
         };
         let mut args = vec!["--ram-mib".to_string(), ram_mib.to_string()];
         if self.owned_blocks {
@@ -180,6 +200,24 @@ fn pick(
 
 static SPAWNED: Mutex<MemLayout> = Mutex::new(MemLayout::Whole);
 static SPAWNS: AtomicU64 = AtomicU64::new(0);
+static BOOT_PLUG: Mutex<BootPlug> = Mutex::new(BootPlug {
+    pending: None,
+    released_at: None,
+});
+
+/// How long after the guest binds the device a held boot plug waits for movable onlining.
+const BOUND_GRACE: Duration = Duration::from_secs(30);
+/// What a guest writes to `auto_online_blocks` to online hot-added memory into ZONE_MOVABLE.
+pub const AUTO_ONLINE_BLOCKS: &str = "/sys/devices/system/memory/auto_online_blocks";
+pub const ONLINE_MOVABLE: &str = "online_movable";
+
+/// The running spawn's boot plug.
+struct BootPlug {
+    /// A held plug: the region's size, and the socket that asks for it.
+    pending: Option<(u64, Endpoint)>,
+    /// When the region was asked for; `None` while it is held.
+    released_at: Option<Instant>,
+}
 
 /// The layout the running worker was spawned with.
 pub fn spawned() -> MemLayout {
@@ -191,12 +229,80 @@ pub fn spawns() -> u64 {
     SPAWNS.load(Ordering::SeqCst)
 }
 
-/// Record a spawn's layout, and watch whether its guest binds the device when that teaches the
-/// VM something.
-pub fn note_spawn(spec: &MemSpec, layout: MemLayout) {
+/// Whether the running spawn holds its region unplugged, waiting for movable onlining.
+pub fn boot_plug_pending() -> bool {
+    BOOT_PLUG
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .pending
+        .is_some()
+}
+
+/// When the running spawn's region was asked for: at spawn unless it was held, `None` while it
+/// is.
+pub fn boot_plug_released_at() -> Option<Instant> {
+    BOOT_PLUG
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .released_at
+}
+
+/// Ask the guest to plug the region a cold `Split` boot held, once; `why` goes to the log.
+/// Whether this call released it: a failed request leaves the plug held, for the next caller to
+/// retry.
+pub fn release_boot_plug(why: &str) -> bool {
+    let mut plug = BOOT_PLUG.lock().unwrap_or_else(|p| p.into_inner());
+    let Some((bytes, socket)) = plug.pending.as_ref() else {
+        return false;
+    };
+    let sent = socket
+        .connect()
+        .and_then(|mut conn| writeln!(conn, "mem {bytes}").and_then(|()| conn.flush()));
+    match sent {
+        Ok(()) => {
+            log::info!(
+                "virtio-mem: plugging the region, {} MiB: {why}",
+                bytes >> 20
+            );
+            plug.pending = None;
+            plug.released_at = Some(Instant::now());
+            true
+        }
+        Err(e) => {
+            log::warn!("virtio-mem: cannot ask the guest to plug its region yet: {e}");
+            false
+        }
+    }
+}
+
+/// Record a spawn's layout, hold its boot plug if it defers it, and watch whether its guest binds
+/// the device when that teaches the VM something or releases the plug.
+pub fn note_spawn(spec: &MemSpec, layout: MemLayout, resumed: bool) {
     *SPAWNED.lock().unwrap_or_else(|p| p.into_inner()) = layout;
     let spawn = SPAWNS.fetch_add(1, Ordering::SeqCst) + 1;
     log::info!("memory: {layout:?}");
+    let held = match (layout, spec.socket.clone()) {
+        (MemLayout::Split { region_mib, .. }, Some(socket))
+            if spec.defers_boot_plug(layout, resumed) =>
+        {
+            Some((region_mib << 20, socket))
+        }
+        _ => None,
+    };
+    *BOOT_PLUG.lock().unwrap_or_else(|p| p.into_inner()) = BootPlug {
+        released_at: held.is_none().then(Instant::now),
+        pending: held.clone(),
+    };
+    if let Some((_, socket)) = held {
+        log::info!("virtio-mem: holding the region until the guest onlines it movable");
+        if let Err(e) = std::thread::Builder::new()
+            .name("virtio-mem-boot-plug".into())
+            .spawn(move || plug_without_movable(socket, spawn))
+        {
+            log::warn!("virtio-mem: cannot watch the held boot plug ({e}); plugging now");
+            release_boot_plug("no watcher for the held plug");
+        }
+    }
     if matches!(layout, MemLayout::Whole) {
         return;
     }
@@ -208,6 +314,42 @@ pub fn note_spawn(spec: &MemSpec, layout: MemLayout) {
         .spawn(move || learn(socket, state_file, layout, spawn))
     {
         log::warn!("virtio-mem: cannot watch whether the guest binds the device: {e}");
+    }
+}
+
+/// Release a held boot plug [`BOUND_GRACE`] after the guest binds the device, if nothing has set
+/// movable onlining by then, or after [`FORGET_AFTER`] when the guest never binds it: the hold
+/// ends either way, and with it the eager agent probing that serves it. Ends with the boot it
+/// watches or the plug's release.
+fn plug_without_movable(socket: Endpoint, spawn: u64) {
+    let started = Instant::now();
+    let mut bound_at = None;
+    while spawns() == spawn && boot_plug_pending() {
+        std::thread::sleep(POLL);
+        if bound_at.is_none() && bound(&socket) == Some(true) {
+            bound_at = Some(Instant::now());
+        }
+        let waited = match bound_at {
+            Some(t) if t.elapsed() >= BOUND_GRACE => Some(format!(
+                "{}s after the guest bound the device",
+                BOUND_GRACE.as_secs()
+            )),
+            None if started.elapsed() >= FORGET_AFTER => Some(format!(
+                "in {}s, nor did the guest bind the device",
+                FORGET_AFTER.as_secs()
+            )),
+            _ => None,
+        };
+        if let Some(waited) = waited
+            && spawns() == spawn
+            && release_boot_plug("no movable onlining")
+        {
+            log::warn!(
+                "virtio-mem: nothing set movable onlining {waited}; the guest's plugged blocks \
+                 come online as its kernel defaults, where kernel objects can keep them from \
+                 unplugging"
+            );
+        }
     }
 }
 
@@ -279,6 +421,14 @@ mod tests {
         // Early boot runs on RAM alone, so it never starts below the floor.
         assert_eq!(MemLayout::split(1024, 8192), SPLIT);
         assert_eq!(MemLayout::split(1024, 2048), MemLayout::Whole);
+        // A large max keeps an eighth of itself as RAM, for the kernel's own memory.
+        assert_eq!(
+            MemLayout::split(2048, 32768),
+            MemLayout::Split {
+                ram_mib: 4096,
+                region_mib: 28672
+            }
+        );
         assert_eq!(SPLIT.elastic_bytes(), Some(6144 << 20));
         assert_eq!(MemLayout::Probe.elastic_bytes(), None);
     }
@@ -326,7 +476,7 @@ mod tests {
     fn worker_args_follow_the_layout() {
         let s = spec(Some((2048, 8192)), true);
         assert_eq!(
-            s.worker_args(MemLayout::Whole),
+            s.worker_args(MemLayout::Whole, false),
             [
                 "--ram-mib",
                 "8192",
@@ -335,7 +485,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            s.worker_args(MemLayout::Probe),
+            s.worker_args(MemLayout::Probe, false),
             [
                 "--ram-mib",
                 "8192",
@@ -346,7 +496,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            s.worker_args(SPLIT),
+            s.worker_args(SPLIT, false),
             [
                 "--ram-mib",
                 "2048",
@@ -359,9 +509,33 @@ mod tests {
             ]
         );
         assert_eq!(
-            spec(Some((2048, 8192)), false).worker_args(MemLayout::Whole),
+            spec(Some((2048, 8192)), false).worker_args(MemLayout::Whole, false),
             ["--ram-mib", "8192"]
         );
+    }
+
+    #[test]
+    fn a_cold_split_with_a_control_socket_holds_its_plug() {
+        let s = MemSpec {
+            socket: Some(Endpoint::Path("/nonexistent/balloon.sock".into())),
+            ..spec(Some((2048, 8192)), true)
+        };
+        let tail = |resumed| {
+            let args = s.worker_args(SPLIT, resumed);
+            args[4..].to_vec()
+        };
+        assert_eq!(tail(false), ["--virtio-mem-mib", "6144"]);
+        // A resumed guest keeps the blocks it had, so the request stands as it was.
+        assert_eq!(
+            tail(true),
+            [
+                "--virtio-mem-mib",
+                "6144",
+                "--virtio-mem-requested-mib",
+                "6144"
+            ]
+        );
+        assert!(!s.defers_boot_plug(MemLayout::Probe, false));
     }
 
     #[test]
@@ -387,7 +561,7 @@ mod tests {
         };
         assert_eq!(s.layout(None), MemLayout::Whole);
         assert_eq!(
-            s.worker_args(MemLayout::Whole),
+            s.worker_args(MemLayout::Whole, false),
             ["--ram-mib", "8192", "--virtio-mem-mib", "2048"]
         );
     }

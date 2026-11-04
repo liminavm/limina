@@ -97,10 +97,12 @@ QEMU's works only on Linux hosts.
 - **Units.** The guest's sub-block is `max(device block size, pageblock)` (`virtio_mem.c:2561`):
   2 MiB on a 4 KiB guest, 32 MiB on a 16 KiB guest, inside 128 MiB memory blocks. Each maps onto one
   or more tagged blocks of direction A, so an unplug is whole-object death.
-- **Stock tier.** Fedora 44 aarch64 builds `CONFIG_VIRTIO_MEM=m` with
+- **Onlining.** Fedora 44 aarch64 builds `CONFIG_VIRTIO_MEM=m` with
   `MHP_DEFAULT_ONLINE_TYPE_ONLINE_AUTO=y`, so plugged memory comes online by itself, but into
-  `ZONE_NORMAL`, which makes unplug best-effort.
-- **Enhanced tier.** Our kernel onlines the region movable, which makes unplug reliable.
+  `ZONE_NORMAL`, where kernel objects can keep a block from unplugging. Written `online_movable`,
+  `/sys/devices/system/memory/auto_online_blocks` sends it to `ZONE_MOVABLE` instead, which makes
+  unplug reliable, and the stock `qemu-guest-agent` may write it under Enforcing SELinux
+  (`spikes/qga-sysfs-movable/`). No kernel change is needed, for either tier.
 - **Why it matters.** The guest migrates pages out of a block before unplugging it, so unplug is
   compaction (problem 4). The plugged size is an exact contract between host and guest (problem 3).
   Long-term pinned pages are migrated out of movable memory or block offlining, so a block under a
@@ -121,15 +123,27 @@ QEMU's works only on Linux hosts.
 - **Probe.** As Whole, plus a dormant 128 MiB virtio-mem region the guest is never asked to plug.
   A managed VM boots this way until its guest binds the device; the supervisor then writes
   `virtio_mem = true` to `state.toml`. The dormant device still blocks hibernation.
-- **Split.** RAM is `max` minus the region, where the region is `max − max(min, 2 GiB)` rounded
-  down to whole memory blocks. The guest runs on RAM alone until `virtio_mem` loads, after the
-  initramfs, and unlocking a LUKS2 root there takes up to 1 GiB for argon2id; a 1 GiB guest cannot
-  unlock it. A VM whose `max` is at most 2 GiB stays Whole; the worker asks the guest to plug all of it from boot
-  (`--virtio-mem-requested-mib`). The policy keeps its decisions and sends them as plug sizes:
-  reclaim `r` becomes `mem (region − r)`, rounded up to the 2 MiB device block. It holds until the
-  boot-time plug lands (or 120 s pass) and never scrubs. A Split boot runs on its RAM until
-  `virtio_mem` loads, and for the whole session if it never does; a boot that runs 300 s without
-  binding clears the flag, so the next one probes again.
+- **Split.** RAM is `max` minus the region, where the region is `max − max(min, 2 GiB, max/8)`
+  rounded down to whole memory blocks. The guest runs on RAM alone until `virtio_mem` loads, after
+  the initramfs, and unlocking a LUKS2 root there takes up to 1 GiB for argon2id; a 1 GiB guest
+  cannot unlock it. With the region movable, every kernel allocation lives in RAM, the region's
+  own `struct page` array among them (1/64 of the region on a 4 KiB guest), hence the eighth of
+  `max`. A VM whose `max` is at most 2 GiB stays Whole.
+
+  A cold Split boot holds the region unplugged until the guest onlines hot-added memory movable.
+  The control plane writes `online_movable` to `auto_online_blocks` through `qemu-guest-agent`,
+  probing a silent agent every tick while the plug is held, then asks for the whole region (`mem`
+  on the control socket); measured 2026-11-04 on the stock F44 image, that lands 6 s after spawn.
+  A guest whose agent has not done it 30 s after binding the device gets the region anyway,
+  onlined as its kernel defaults (35 s after spawn with the agent masked), and so does one that
+  never binds it within 300 s. A resume, and a VM without a
+  control socket, plug from boot as before (`--virtio-mem-requested-mib`).
+
+  The policy keeps its decisions and sends them as plug sizes: reclaim `r` becomes
+  `mem (region − r)`, rounded up to the 2 MiB device block. It sends nothing while the plug is
+  held, then waits until the plug lands (or 120 s pass), and never scrubs. A Split boot runs on
+  its RAM until `virtio_mem` loads, and for the whole session if it never does; a boot that runs
+  300 s without binding clears the flag, so the next one probes again.
 
 A resume takes the layout recorded in its `[suspended]` record, whatever has been learned since.
 A reboot relaunch inside one session takes what has been learned, so it may split where the first
@@ -181,7 +195,7 @@ the host compressor at once (772 MB of 777 MB), as anonymous memory's do under R
    `internal`. Corroborates §4.1; not a blocker.
 5. **virtio-mem on a stock guest:** a prototype device first. Check that Fedora 44 autoloads
    `virtio_mem` on virtio-mmio, which zone it onlines into, and the unplug success rate under a
-   pinned workload; repeat on the enhanced kernel with movable onlining.
+   pinned workload; repeat with movable onlining.
    *Blocker for B:* the stock guest cannot use the device at all. A low stock unplug rate is not a
    blocker (the balloon stays as the stock fallback); it shapes the policy.
    *Measured 2026-10-22* (`tests/virtio_mem.rs`, stock F44 guest, 4 GiB RAM, a 2 GiB region at
@@ -209,7 +223,7 @@ the host compressor at once (772 MB of 777 MB), as anonymous memory's do under R
 5. **B in libkrun:** the virtio-mem device over a tagged-block region, its config space and
    plug/unplug requests; Cardea leaves the region out of the memory map. **B in limina:** the
    policy drives virtio-mem for the elastic range when the guest has bound the device, and the
-   balloon otherwise; the enhanced kernel onlines the region movable.
+   balloon otherwise; the guest agent sets movable onlining before the region is plugged.
 6. Measurement §4.2 runs alongside; whatever holds orphaned memory is fixed on its own terms.
 
 ## 6. Prior evidence this note revises
