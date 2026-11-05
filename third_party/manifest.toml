@@ -80,7 +80,7 @@ tree = "/Volumes/mesa-cs/mesa-metal-guest"
 [virglrs]
 repo = "https://github.com/liminavm/virglrs.git"
 branch = "main"
-rev = "49ddd13de3e058693ddb347de4873513e100ae53"
+rev = "b9d75f16436ec4aea7d8a0c1b7297b4fbaf27726"
 
 # janus: the TPM 2.0 engine behind libkrun's TIS device (docs/design/vtpm.md), ours outright and
 # consumed by libkrun's krun-devices as an optional path dependency (`tpm` feature).

@@ -82,24 +82,16 @@ const VPP_SRC: &str = "/tmp/limina-vpp-src.bgra";
 const VPP_DST: &str = "/tmp/limina-vpp-dst.bgra";
 const VPP_REF: &str = "/tmp/limina-vpp-ref.bgra";
 
-/// What the VA-scaled image scores against the same scale done on the CPU, in dB.
+/// The least the VA-scaled image scores against the same scale done on the CPU, in dB.
 ///
-/// This brackets a value that is KNOWN WRONG, and it is meant to. mesa's graphics compositor
-/// uploads a colour matrix nothing writes after `vl_compositor_init_state` seeds it, so an
-/// RGB -> RGB post-process converts with BT.709 YUV -> RGB instead of the identity the VA
-/// frontend computed (`vl_compositor_gfx.c` `set_csc_matrix`; only a driver setting
-/// `prefer_compute_for_multimedia` escapes it, and virgl does not). The geometry is exact and
-/// the colours are not, so the picture scores far below what a filter difference costs.
-///
-/// Both directions out of the band mean something, which is why it is a band and not a floor:
-///   - **~33 dB**: the guest driver gained the fix. Our vendor drivers carry it (row 0017 of
-///     `docs/upstreaming/ledger/kosmickrisp-guest.md`); this gate rides the STOCK image, so this
-///     is the day stock Fedora shipped it. Retarget the assertion at correctness -- the
-///     measured value with the fix is 33.18 dB -- rather than widening the band.
-///   - **~4.9 dB**: the host regressed instead. That is the reading when a sampler view's
-///     swizzle lands on the shared texture object again and all three of vl_compositor's
-///     colour samplers read one channel (virglrs `0292db7`).
-const VPP_PSNR_KNOWN_WRONG: (f64, f64) = (2.0, 3.5);
+/// A correct conversion with a different bilinear filter measures 33.18 dB (Mesa 26.2's
+/// compositor, stock Fedora 44). Every known failure sits far below it:
+///   - **~3.3 dB**: the guest driver converts RGB -> RGB with BT.709 YUV -> RGB instead of the
+///     identity. Mesa before 26.2 did (`vl_compositor_gfx.c` uploaded a colour matrix nothing
+///     wrote after `vl_compositor_init_state`); the stock image ran it until its 26.2 update.
+///   - **~4.9 dB**: a sampler view's swizzle lands on the shared texture object again and all
+///     three of vl_compositor's colour samplers read one channel (virglrs `0292db7`).
+const VPP_PSNR_FLOOR: f64 = 30.0;
 
 /// One frame of 320x240 luma — the window the uniformity check looks at.
 const LUMA_BYTES: u32 = 320 * 240;
@@ -277,7 +269,9 @@ fn stock_guest_hardware_decodes_vp9_through_vaapi() {
     // vl_compositor on the host, which is not the decode path and failed independently of it:
     // the shader's colour-space matrix never reached it and its sampler declaration did not
     // match the bound view, so every post-processed pixel came out black while the decode
-    // above was already bit-exact.
+    // above was already bit-exact. Mesa 26.2's compositor fetches alpha through a swizzled
+    // sampler (`SAMP[0].wwww`), which vrend once translated into GLSL no driver compiles; the
+    // refused shader poisoned the context and every post-process came back cleared.
     let vpp = guest
         .ssh_exec_timeout(
             &format!(
@@ -342,23 +336,20 @@ hwdownload,format=bgra' -frames:v 1 -f rawvideo {VPP_DST}; \
     // reason we have named. Every oracle above scores "not a cleared surface", which a
     // permuted or half-converted result passes just as easily: the compositor once returned
     // this frame's geometry perfectly with all three colour samplers reading one channel, and
-    // nothing here noticed. Comparing against the same scale on the CPU catches that -- and
-    // catches, too, the guest-side colour defect that is all that remains (see
-    // VPP_PSNR_KNOWN_WRONG, which is where the bounds and both failure directions are
-    // explained). Alpha is dropped from the compare (both sides go through rgb24).
+    // nothing here noticed. Comparing against the same scale on the CPU catches that, and the
+    // colour defects VPP_PSNR_FLOOR names. Alpha is dropped from the compare (both sides go
+    // through rgb24).
     let measured = vpp_field("vpp_psnr");
     let psnr: f64 = if measured == "inf" {
         f64::INFINITY
     } else {
         measured.parse().unwrap_or(f64::NAN)
     };
-    let (low, high) = VPP_PSNR_KNOWN_WRONG;
     assert!(
-        (low..=high).contains(&psnr),
-        "the VA-scaled image scores {measured} dB against the same scale on the CPU, outside \
-         the {low}..={high} this stack is known to sit in. Above it, the guest driver was \
-         fixed and this gate should now assert correctness; below it, the host regressed. \
-         VPP_PSNR_KNOWN_WRONG says what each reading means.\n{vpp}"
+        psnr >= VPP_PSNR_FLOOR,
+        "the VA-scaled image scores {measured} dB against the same scale on the CPU, below the \
+         {VPP_PSNR_FLOOR} a correct conversion clears; VPP_PSNR_FLOOR names the readings of the \
+         known failures.\n{vpp}"
     );
 
     eprintln!("VA post-processing converted and scaled without clearing the surface");
