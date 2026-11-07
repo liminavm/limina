@@ -344,6 +344,22 @@ impl Holding {
             why: hold.why,
         }
     }
+
+    /// Does a seam held on `from` stand between it and `to`? Then the range cannot have put
+    /// the pointer on `to`: every held side comes with a known share the range is clamped
+    /// inside ([`Hold::of`]), and a held seam forwards nothing on the relative device. A
+    /// display that cannot be placed holds every side, so it refuses every crossing.
+    pub(crate) fn refuses(&self, from: usize, to: usize) -> Option<Refusal> {
+        if self.slot != from || from == to {
+            return None;
+        }
+        self.why.iter().flatten().copied().find(|r| match *r {
+            Refusal::Unplaced { .. } => true,
+            Refusal::Disagree { range_to, .. } | Refusal::Uncovered { range_to, .. } => {
+                range_to == to
+            }
+        })
+    }
 }
 
 /// One change in which seams are held, for the log. `side` is `None` when the change applies
@@ -522,6 +538,37 @@ fn host_neighbour(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hold refuses exactly the slots it holds against, and only for the slot it was taken on.
+    #[test]
+    fn a_holding_refuses_the_slots_beyond_its_held_seams() {
+        let held = Holding {
+            slot: 1,
+            why: [
+                Some(Refusal::Uncovered {
+                    range_to: 0,
+                    cover: Cover::OffActiveSpace,
+                }),
+                Some(Refusal::Disagree {
+                    range_to: 2,
+                    host_shows: None,
+                }),
+                None,
+                None,
+            ],
+        };
+        assert!(held.refuses(1, 0).is_some());
+        assert!(held.refuses(1, 2).is_some());
+        assert_eq!(held.refuses(1, 3), None);
+        assert_eq!(held.refuses(1, 1), None);
+        assert_eq!(held.refuses(0, 2), None);
+        assert_eq!(Holding::default().refuses(0, 1), None);
+        let unplaced = Holding {
+            slot: 0,
+            why: [Some(Refusal::Unplaced { slot: 3 }); 4],
+        };
+        assert!(unplaced.refuses(0, 1).is_some());
+    }
 
     const RANGE: f64 = 32767.0;
     /// The BenQ's width in guest pixels, so a one-pixel inset has a real size: 2560 px over a

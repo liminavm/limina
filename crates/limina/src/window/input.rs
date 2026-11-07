@@ -3002,9 +3002,13 @@ impl InputState {
         let echo = super::echo::snapshot();
         let was = self.capture_slot.get();
         let desktop = super::arrangement::desktop_in_range(f64::from(ABS_MAX));
-        let Some(located) =
-            super::echo::locate(was, &echo, desktop.as_ref(), self.capture_range.get())
-        else {
+        let Some(located) = super::echo::follow(
+            was,
+            &echo,
+            desktop.as_ref(),
+            self.capture_range.get(),
+            &self.seam_holding.get(),
+        ) else {
             return;
         };
         let on = match located {

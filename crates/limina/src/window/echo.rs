@@ -278,6 +278,30 @@ pub(crate) fn locate(
     })
 }
 
+/// Where the captured pointer is, for the captured estimate to follow: [`locate`], except
+/// that a plane across a seam `holding` holds is not followed — `None`, nothing to re-base.
+///
+/// The range never goes past a held seam, so a plane beyond one is the sprite reaching
+/// across it, not the pointer. [`CursorEcho::shows_pointer`] tells the two apart only while
+/// the guest reports its hotspot: a compositor that leaves `HOTSPOT_X/Y` unset still places
+/// the plane at pointer minus hotspot (synoik, measured 2026-11-06: `hot=(0,0)`, the plane a
+/// steady (4,1)–(9,7) px up-left of where we sent it), so the capture slot's plane reads just
+/// off its scanout and the neighbour's reads on it. Following that walked the grab onto a
+/// display behind another Space, which drops it with the host pointer left at the park.
+pub(crate) fn follow(
+    prefer: usize,
+    echo: &[CursorEcho; MAX_SCANOUTS],
+    desktop: Option<&super::arrangement::Desktop>,
+    sent: Option<(f64, f64)>,
+    holding: &super::seams::Holding,
+) -> Option<Located> {
+    let located = locate(prefer, echo, desktop, sent)?;
+    let to = match located {
+        Located::Echo { slot, .. } | Located::Sent { slot, .. } => slot,
+    };
+    holding.refuses(prefer, to).is_none().then_some(located)
+}
+
 pub(crate) fn expected_pixel(unit: (f64, f64), scanout: (u32, u32)) -> (f64, f64) {
     (
         unit.0.clamp(0.0, 1.0) * f64::from(scanout.0),
@@ -420,6 +444,106 @@ mod tests {
             locate(1, &none, Some(&reported()), Some((30_000.0, 30_000.0))),
             None
         );
+    }
+
+    /// The dogfood's 2026-11-06 layout: a 3072x1728-logical display (3840x2160 at 1.25) left
+    /// of a 2048x1328 one, as range shares.
+    fn dogfood_desktop() -> super::super::arrangement::Desktop {
+        use super::super::arrangement::{Desktop, RangeRect};
+        let seam = 32_767.0 * 3072.0 / 5120.0;
+        Desktop::new(vec![
+            (
+                0,
+                RangeRect {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: seam,
+                    y1: 32_767.0,
+                },
+            ),
+            (
+                1,
+                RangeRect {
+                    x0: seam,
+                    y0: 0.0,
+                    x1: 32_767.0,
+                    y1: 32_767.0 * 1328.0 / 1728.0,
+                },
+            ),
+        ])
+    }
+
+    /// slot 1's left seam held toward slot 0, whose window is on a Space the user swiped away.
+    fn holding_left_toward_0() -> super::super::seams::Holding {
+        use super::super::seams::{Cover, Holding, Refusal};
+        Holding {
+            slot: 1,
+            why: [
+                Some(Refusal::Uncovered {
+                    range_to: 0,
+                    cover: Cover::OffActiveSpace,
+                }),
+                None,
+                None,
+                None,
+            ],
+        }
+    }
+
+    /// THE dogfood pullback (2026-11-06, synoik): a compositor that leaves the plane hotspot
+    /// unreported (`hot=(0,0)`) but still places the plane at pointer minus hotspot. With the
+    /// range held 8 px inside slot 1, slot 1's plane reads `x = -1` (off its scanout) while the
+    /// sprite reaching across lights slot 0's plane at 3838 — which read as a crossing, dropped
+    /// the grab onto a display behind another Space, and left the host pointer at the park.
+    /// The absolute device cannot put the pointer past a seam we hold, so it is a straddle.
+    #[test]
+    fn an_echo_across_a_held_seam_is_a_straddle_not_a_crossing() {
+        let echo = rig(shown(3838, 1245, 3840, 2160), shown(-1, 995, 2048, 1328));
+        let desktop = dogfood_desktop();
+        let sent = Some((19_711.0, 19_199.0));
+        // The read on its own does call it slot 0 — that part is the echo's honest answer.
+        assert!(matches!(
+            locate(1, &echo, Some(&desktop), sent),
+            Some(Located::Echo { slot: 0, .. })
+        ));
+        assert_eq!(
+            follow(1, &echo, Some(&desktop), sent, &holding_left_toward_0()),
+            None
+        );
+    }
+
+    /// Only the slot the hold refuses is refused: a seam that is not held is crossed as before,
+    /// and a plane on the capture slot itself is followed with the hold in place.
+    #[test]
+    fn a_hold_refuses_only_the_slot_it_holds_against() {
+        let desktop = dogfood_desktop();
+        let sent = Some((19_500.0, 19_199.0));
+        let crossed = rig(shown(3700, 1245, 3840, 2160), CursorEcho::NONE);
+        assert!(matches!(
+            follow(
+                1,
+                &crossed,
+                Some(&desktop),
+                sent,
+                &super::super::seams::Holding::default()
+            ),
+            Some(Located::Echo { slot: 0, .. })
+        ));
+        let home = rig(CursorEcho::NONE, shown(40, 995, 2048, 1328));
+        assert!(matches!(
+            follow(1, &home, Some(&desktop), sent, &holding_left_toward_0()),
+            Some(Located::Echo { slot: 1, .. })
+        ));
+        // A hold reported for another slot says nothing about this one.
+        let other = super::super::seams::Holding {
+            slot: 0,
+            ..holding_left_toward_0()
+        };
+        let echo = rig(shown(3838, 1245, 3840, 2160), shown(-1, 995, 2048, 1328));
+        assert!(matches!(
+            follow(1, &echo, Some(&desktop), sent, &other),
+            Some(Located::Echo { slot: 0, .. })
+        ));
     }
 
     /// The echo is the plane origin; the stored pointer adds the hotspot back (the measured
