@@ -14,12 +14,16 @@ a stock guest kernel can take it (the design is `spikes/metal-heap-addressing/SK
   travel as dma-bufs, and imported into other contexts), fences for a context's commits, surfaces,
   and `INFO`, which says what protocol the host speaks without creating a context, so a driver can
   decline a host it does not speak to for the price of one ioctl.
-- `0001-hook-the-limina-extension.patch` — the only change to upstream files: the feature bit,
+- `0001-hook-the-limina-extension.patch` — the change to upstream files: the feature bit,
   the ioctl table, the device fields, `mmap` routed through the extension, and two helpers in
   `virtgpu_vq.c`: one sends a command and waits for its response, the other queues a fenced
   `FENCE`. It is plain `git diff` output: to change it, commit the stable tag's
   `drivers/gpu/drm/virtio/` files to a scratch git repository, `git apply` the patch, edit, and
   `git diff` again.
+- `0002-init-the-restore-node-of-a-surface-blob.patch` — applied after the hook on a series whose
+  objects carry a `restore_node` (7.3+): every created blob is freed off the restore list there,
+  so the surface blob the extension builds must start with an initialised node, or freeing one
+  BUGs in `list_del` and wedges the compositor.
 - `backports/` — upstream fixes a vendored series predates, applied before the hook only where the
   series' source still lacks them (the build script names each one's tell). `d1b894c5bbb3` takes
   the hotplug off the control queue's dequeue worker: without it a stock 6.19 guest on the Metal

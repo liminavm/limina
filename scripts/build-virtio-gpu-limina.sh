@@ -112,6 +112,11 @@ fi
 echo "==> hooking in the extension"
 # Patch paths are in-tree (a/drivers/gpu/drm/virtio/...); strip to the tree root.
 patch -p5 -d "$TREE" --no-backup-if-mismatch < "$SRC/0001-hook-the-limina-extension.patch"
+# A series with a restore list (7.3+) frees every created blob off it, ours included.
+if grep -q 'struct list_head restore_node;' "$TREE/virtgpu_drv.h"; then
+    patch -p5 -d "$TREE" --no-backup-if-mismatch \
+        < "$SRC/0002-init-the-restore-node-of-a-surface-blob.patch"
+fi
 cp "$SRC/virtgpu_limina.c" "$SRC/virtgpu_limina_drm.h" "$TREE/"
 
 # In-tree TRACE_INCLUDE_PATH is relative to include/trace; out of tree "." resolves via -I$(src).

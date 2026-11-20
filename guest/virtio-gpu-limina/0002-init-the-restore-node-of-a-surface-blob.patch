@@ -1,0 +1,20 @@
+Initialise the restore node of a surface blob (series with a restore list: 7.3+).
+
+virtio_gpu_vram_init() builds the object behind VIRTGPU_LIMINA_SURFACE_CREATE without
+virtio_gpu_vram_create()'s INIT_LIST_HEAD. From 7.3 on, virtio_gpu_vram_free() list_del_init()s
+every created blob's restore_node, so freeing a surface tripped list_debug's BUG and wedged the
+freeing task in D state: gnome-shell on the Metal transport never reached its desktop.
+Applied only where virtgpu_drv.h has restore_node; older series have no such field.
+
+diff --git a/drivers/gpu/drm/virtio/virtgpu_vram.c b/drivers/gpu/drm/virtio/virtgpu_vram.c
+--- a/drivers/gpu/drm/virtio/virtgpu_vram.c
++++ b/drivers/gpu/drm/virtio/virtgpu_vram.c
+@@ -212,6 +212,8 @@
+ 
+ 	obj = &vram->base.base.base;
+ 	obj->funcs = &virtio_gpu_vram_funcs;
++
++	INIT_LIST_HEAD(&vram->base.restore_node);
+ 
+ 	params->size = PAGE_ALIGN(params->size);
+ 	drm_gem_private_object_init(vgdev->ddev, obj, params->size);
