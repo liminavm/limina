@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
 
-# Bring stock-tier images up to the distro's current packages, in place.
+# Bring images up to the distro's current packages, in place: stock-tier images, and the distro
+# half of enhanced ones (their stock kernel stays versionlocked; a payload moves the 16k kernel).
 #
 #   scripts/provision/update-stock.sh Fedora-Workstation-44.accessible.raw \
 #       Fedora-Workstation-44.stock.test.raw
@@ -104,8 +105,14 @@ update_one() {
   [ -n "$port" ] || { echo "!!! $img did not come back after the upgrade (see $log)" >&2; return 1; }
   g=(ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1")
   echo "--- after"; "${g[@]}" "$VERSIONS" | sed 's/^/   /'
-  newest="$("${g[@]}" "rpm -q --last kernel-core | head -1 | sed -E 's/^kernel-core-([^ ]+).*/\1/'")"
   running="$("${g[@]}" 'uname -r')"
+  # An enhanced image boots limina's 16k kernel and versionlocks the stock one, so the kernel it
+  # should run is the newest of ours, named by the KREL its package installs under /lib/modules.
+  case "$running" in
+    *limina*) newest="$("${g[@]}" "rpm -q --last limina-kernel-16k | head -1 | awk '{print \$1}' |
+                xargs rpm -ql | sed -nE 's|^/lib/modules/([^/]+)/vmlinuz$|\1|p'")" ;;
+    *) newest="$("${g[@]}" "rpm -q --last kernel-core | head -1 | sed -E 's/^kernel-core-([^ ]+).*/\1/'")" ;;
+  esac
   failed="$("${g[@]}" 'systemctl --failed --plain --no-legend' || true)"
   poweroff "$port"
   local ok=1

@@ -31,13 +31,23 @@ case "$KTAG" in
   limina:*)
     REV="${KTAG#limina:}"
     VERSION="limina.${REV:0:12}"
-    BASE_URL="https://raw.githubusercontent.com/liminavm/linux/$REV/drivers/gpu/drm/virtio"
-    fetch_url() { printf '%s/%s\n' "$BASE_URL" "$1"; }
+    # A rev the fork does not carry yet (pins can lead pushes) is read from the local repository
+    # third_party/manifest.local.toml names for [linux], when that repository has it.
+    # shellcheck source=scripts/lib/manifest.sh
+    . scripts/lib/manifest.sh
+    LOCAL_LINUX="$(pin_local_repo linux)"
+    if [ -n "$LOCAL_LINUX" ] && _manifest_git -C "$LOCAL_LINUX" cat-file -e "$REV^{commit}" 2>/dev/null; then
+      pin_note linux
+      fetch_file() { _manifest_git -C "$LOCAL_LINUX" show "$REV:$1" > "$2"; }
+    else
+      fetch_file() { curl -sfL "https://raw.githubusercontent.com/liminavm/linux/$REV/$1" -o "$2"; }
+    fi
     ;;
   *)
     VERSION="${KTAG#v}.limina1"
-    BASE_URL="https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain/drivers/gpu/drm/virtio"
-    fetch_url() { printf '%s/%s?h=%s\n' "$BASE_URL" "$1" "$KTAG"; }
+    fetch_file() {
+      curl -sfL "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain/$1?h=$KTAG" -o "$2"
+    }
     ;;
 esac
 NAME="limina-virtio-gpu-ext"
@@ -67,11 +77,21 @@ mkdir -p "$TREE"
 
 echo "==> vendoring virtio-gpu sources from $KTAG"
 for f in "${FILES[@]}"; do
-    curl -sfL "$(fetch_url "$f")" -o "$TREE/$f" \
+    fetch_file "drivers/gpu/drm/virtio/$f" "$TREE/$f" \
         || { echo "FAILED to fetch $f for $KTAG" >&2; exit 1; }
     # cgit serves an HTML error page for unknown refs; make sure we got C source.
     head -c 100 "$TREE/$f" | grep -q "<html" && { echo "bad fetch: $f ($KTAG)" >&2; exit 1; }
 done
+# The kernel series (major.minor) these sources are, which is what the DKMS package files them
+# under: from the tag for a stable series, from the fork's own Makefile at the rev otherwise.
+case "$KTAG" in
+  limina:*)
+    fetch_file Makefile /dev/stdout \
+        | awk '/^VERSION =/ {v=$3} /^PATCHLEVEL =/ {p=$3} END {print v "." p}' > "$TREE/SERIES"
+    ;;
+  *) echo "${KTAG#v}" | cut -d. -f1-2 > "$TREE/SERIES" ;;
+esac
+grep -Eqx '[0-9]+\.[0-9]+' "$TREE/SERIES" || { echo "cannot tell the series of $KTAG" >&2; exit 1; }
 if [ -n "$SUMS" ] && ! sums_out="$(cd "$TREE" && shasum -a 256 -c "$SUMS" 2>&1)"; then
     printf '%s\n' "$sums_out" | grep -v ': OK$' >&2
     echo "the $KTAG sources do not match $SRC/sources/$KTAG.sha256" >&2
@@ -115,7 +135,7 @@ container run --rm --cpus 4 --memory 4g \
     -v "$(pwd)/$TREE:/src:ro" \
     -v "$(pwd)/$OUT/$KREL:/out" \
     "$LIMINA_BUILD_IMAGE" bash -euo pipefail -c "
-        dnf -y -q install 'kernel-devel-$KREL' >/dev/null
+        dnf -y -q --refresh install 'kernel-devel-$KREL' >/dev/null
         cp -r /src /tmp/build
         make -C '/usr/src/kernels/$KREL' M=/tmp/build W=1 modules
         cp /tmp/build/virtio-gpu.ko /out/
