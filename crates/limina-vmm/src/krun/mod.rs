@@ -167,6 +167,11 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
     })
     .map_err(|e| anyhow!("set_vm_config: {e:?}"))?;
 
+    // A guest reset (PSCI SYSTEM_RESET) ends the worker with the code the supervisor relaunches
+    // on (`limina::supervisor::WORKER_EXIT_REBOOT`), never a clean power-off's 0. Set here rather
+    // than left to libkrun's default, which is a platform's to choose and upstream's is 0.
+    vmr.reset_exit_code = Some(vmm::FC_EXIT_CODE_REBOOT);
+
     // Stage-2 granule. Left alone unless asked: the host default is the host page size, and a
     // guest whose own pages are that size or larger never notices. A 4 KiB-page guest does --
     // its virtio-gpu host-visible blobs land on 4 KiB-granular guest addresses that a 16 KiB
