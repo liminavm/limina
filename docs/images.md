@@ -415,7 +415,9 @@ Plasma's own D-Bus services. Built to verify the session helper's idle-inhibit s
   KWin 6.7.5), with `swayidle` and `wayland-utils` as probes. GDM stays the display manager:
   `/var/lib/AccountsService/users/claude` has `Session=plasma`, so autologin comes up in Plasma.
   The GNOME session is still installed; switch back by editing that file.
-- **KWin composites with OpenGL** on virgl (zink on KosmicKrisp). It needs a worker with virglrs
+- **KWin composites with OpenGL**: on zink over the Metal transport when the host offers it
+  (as KWin does on the current F44 packages), on virgl (zink on KosmicKrisp host-side) when
+  it does not. The virgl path needs a worker with virglrs
   `96a7b3d` and libkrun `e493221a` or later: an older one never answers a GL query that was not
   ready when first asked, KWin blocks on its render-time query after the first page flip, and
   Plasma never finishes starting (`spikes/kde-kwin-gl-hang/`). `KWIN_COMPOSE=Q` in
@@ -432,8 +434,9 @@ Run it like any enhanced image: `cargo xtask run --disk Fedora-Workstation-44.en
 Plasma's Wayland socket is `wayland-0`.
 
 L2 tests boot it through `GuestConfig::seated_efi_kde_from_env` (`LIMINA_TEST_DISK_KDE`
-overrides): `tests/kde_session.rs` (KWin composites with OpenGL on virgl and the desktop renders)
-and `kde_vrend_world_survives_snapshot_restore` in `tests/vrend_session_restore.rs`. The tests
+overrides), always without the Metal transport so that KWin is on virgl:
+`tests/kde_session.rs` (KWin composites with OpenGL on virgl and the desktop renders) and
+`kde_vrend_world_survives_snapshot_restore` in `tests/vrend_session_restore.rs`. The tests
 boot it read-only, so the image's own state is what they test — keep it free of anything that
 changes how the session comes up.
 

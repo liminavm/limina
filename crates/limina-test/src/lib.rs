@@ -1173,7 +1173,7 @@ impl GuestConfig {
     ///
     /// The host offers the Metal transport, which the enhanced images' vendor GPU drivers take:
     /// the desktop and its clients run on it. `LIMINA_TEST_TRANSPORT=venus` runs them on venus.
-    /// The synoik and KDE configs inherit it. See [`metal::enhanced_on_transport`].
+    /// The synoik config inherits it; the KDE one does not. See [`metal::enhanced_on_transport`].
     pub fn seated_efi_fedora_from_env() -> Result<GuestConfig> {
         let disk = match std::env::var("LIMINA_TEST_DISK_ENH") {
             Ok(p) => PathBuf::from(p),
@@ -1274,6 +1274,9 @@ impl GuestConfig {
     /// image — the same enhanced userspace with GDM autologin into Plasma, so KWin composites on
     /// virgl/vrend where the GNOME golden runs mutter.
     ///
+    /// The host never offers the Metal transport here, whatever `LIMINA_TEST_TRANSPORT` says: the
+    /// KDE tests guard the vrend path, and a KWin offered the transport composites on zink over it.
+    ///
     /// Pinned to the F44 family (`Fedora-Workstation-44.enhanced.kde.raw`) for the same reason as
     /// [`GuestConfig::seated_efi_synoik_from_env`]: the image exists for one release only.
     /// Overrides: `LIMINA_TEST_DISK_KDE`, `LIMINA_FIRMWARE`, plus the usual
@@ -1289,12 +1292,7 @@ impl GuestConfig {
             "KDE enhanced disk not found at {disk:?} (set LIMINA_TEST_DISK_KDE); this is a \
              machine-local golden, see docs/images.md"
         );
-        let mut cfg = GuestConfig::seated_efi_fedora_from_env()?;
-        match &mut cfg.boot {
-            Boot::Firmware { disk: d, .. } => *d = disk,
-            other => anyhow::bail!("seated_efi_fedora_from_env built an unexpected boot {other:?}"),
-        }
-        Ok(cfg)
+        GuestConfig::seated_efi_fedora_from_env_with_disk(disk)
     }
 
     /// Append a verbatim extra flag to the `limina` supervisor command line.
