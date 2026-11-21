@@ -1808,12 +1808,15 @@ boots the video corpora and fluster goldens were recorded from — re-verify or 
 pick a delay for the PNG encoder. After the flip: fluster verdicts and replay-corpus scores unchanged,
 and the frame oracle reaching the parked path with no knob set.
 
-### `seated_gpu_workload_survives_restore_unchanged` intermittently loses the extension rings on restore
-`l2_desktop_restore_landmarks.rs` fails with `gpu restore: extension rings: GPU host did not reply`
+### A GPU restore under suite load intermittently loses the extension rings
+A restore test fails with `gpu restore: extension rings: GPU host did not reply`
 (libkrun `virtio/gpu/worker.rs`, the `ext.restore_rings` arm), then `staged snapshot replay failed;
-guest session will restart`. Seen in four full-suite runs on different branches (2026-10-18,
-2026-10-19, 2026-10-20 and 2026-11-02, identical lines); the test passed alone straight after each
-time (three solo passes in a row on 2026-11-02). The
+guest session will restart`. Seen on `l2_desktop_restore_landmarks.rs`'s
+`seated_gpu_workload_survives_restore_unchanged` in four full-suite runs on different branches
+(2026-10-18, 2026-10-19, 2026-10-20 and 2026-11-02, identical lines), and on
+`l2_synoik_restore_landmarks.rs`'s `synoik_desktop_survives_snapshot_restore` in one (2026-11-21),
+so it belongs to the restore path, not to one test. Each time the test passed alone straight after
+(three solo passes in a row on 2026-11-02 and on 2026-11-21). The
 words are the GPU host client's timeout (`crates/limina-gpu-host/src/mach.rs`, the reply wait), and
 every GPU-host call, restore included, shares one flat 10 s deadline (`CALL_TIMEOUT_MS`,
 `crates/limina-gpu-host/src/client.rs`). That makes a slow restore under suite load the first
@@ -1825,12 +1828,25 @@ that reproduces it (loop the test under suite-like load with the VM held on fail
 `l2_host_vblank.rs` allows 50 µs (1200 ticks) of phase error on each of 30 vblanks; failing runs have
 one outlier while the rest sit at 50–550 ticks: 1732 ticks (2026-10-18), 3751 ticks (2026-10-19,
 next to a 404013/396739 spacing pair, i.e. one late wake that the next one caught up), 2177 and
-3201 ticks (2026-10-23, two suite runs in a row, each beside the same kind of spacing pair). All were
-under a full suite; the test passed alone straight after (on 2026-10-23 three runs in a row, every
-error within 270 ticks). Open: whether the outlier is guest
+3201 ticks (2026-10-23, two suite runs in a row, each beside the same kind of spacing pair), 1697
+ticks (2026-11-21, beside a 401993/398703 pair). All were under a full suite; the test passed alone
+straight after (three runs in a row on 2026-10-23, every error within 270 ticks, and again on
+2026-11-21). Open: whether the outlier is guest
 scheduling (the wake latencies the test prints reach 2.6 ms), the host vsync source, or the push
 path — and then whether the oracle should tolerate a bounded number of late wakes or the late wake
 is a real defect.
+
+### `page_reporting_returns_free_memory_in_plugged_blocks` fails on a lost heal race
+`virtio_mem.rs` asserts no tracker line and zero strays, and about one run in five logs
+`released-ram: stray stage-2 fault at pa=… (guest RAM, not in the released set — lost heal race);
+retrying` (1 to 3 strays) while the release itself succeeds and the guest stays alive. Measured
+2026-11-21 alone on the stock test image: 2 of 10 failures on the F44 packages of 2026-11-04 and 2
+of 10 on those of 2026-11-20, so not a guest-update regression; the same line also failed
+`a_guest_with_page_reporting_survives_inplace_s2idle` once. libkrun's `released_ram.rs`
+(`handle_fault`) answers such a fault with a retry, documented as the race of two vCPUs on one
+range, and stops the VM only past a per-page cap. Open: whether a stray is ever anything but that
+race (then the oracle should count only the capped, fatal case) or a hole in the bookkeeping the
+retry is hiding.
 
 ### Watch `l1_real_session_helper_bridges_clipboard_via_mock_mutter` for a second failure
 Seen once (2026-08-04): the mock log reached `CLAIMED_NAME / CREATE_SESSION / START / ENABLE_CLIPBOARD`, but
