@@ -43,9 +43,10 @@
 //! - It drives a **private named pasteboard** (`LIMINA_PASTEBOARD`), never the general one.
 //!   A test that clobbers the developer's real clipboard on every suite run is not a test
 //!   anyone will keep running.
-//! - `wl-copy`/`wl-paste` need the session's `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR`, and a
-//!   non-login ssh shell has neither — the same false negative that makes `vulkaninfo`
-//!   enumerate nothing over ssh. Both are set explicitly.
+//! - The guest side of the round trip is the X `CLIPBOARD` on Xwayland, read and owned by an
+//!   X11 client ([`in_x`]): that is the side `spice-vdagent` serves, and the Wayland tools
+//!   cannot reach the selection from ssh on a stock mutter (no data-control, no focus). A
+//!   non-login ssh shell has none of the session's environment, so it is all set explicitly.
 //! - The host→guest direction is **poll-driven**: the supervisor watches `changeCount` on a
 //!   timer (500 ms by default), so the copy is not instant and a single check right after
 //!   the write is a race, not an assertion.
@@ -72,6 +73,43 @@ fn in_session(cmd: &str) -> String {
         "export XDG_RUNTIME_DIR=/run/user/$(id -u); \
          export WAYLAND_DISPLAY=$(ls \"$XDG_RUNTIME_DIR\" 2>/dev/null | grep -m1 '^wayland-[0-9]\\+$'); \
          {cmd}"
+    )
+}
+
+/// Run a guest command as an X11 client of the seated session's Xwayland (`:0`).
+///
+/// The clipboard oracles read and own the X `CLIPBOARD` because that is the side
+/// `spice-vdagent` serves: it is an X client, and getting its selection to Wayland clients is
+/// mutter's own X11<->Wayland bridge. The Wayland tools cannot stand in from an ssh shell on a
+/// stock mutter: with no data-control protocol, `wl-paste` and `wl-copy` reach the selection
+/// only through a window that holds keyboard focus, and a window mapped from ssh never gets it,
+/// so both block until killed. (They worked while the images carried a mutter build with
+/// ext-data-control, and stopped at the first distro update that replaced it.) The auth file
+/// is mutter's, under the runtime dir, with a random suffix.
+fn in_x(cmd: &str) -> String {
+    format!(
+        "export XDG_RUNTIME_DIR=/run/user/$(id -u); \
+         export DISPLAY=:0 GDK_BACKEND=x11; \
+         export XAUTHORITY=$(ls \"$XDG_RUNTIME_DIR\"/.mutter-Xwaylandauth.* 2>/dev/null | head -n 1); \
+         {cmd}"
+    )
+}
+
+/// The X `CLIPBOARD`'s text, through GTK 3's X11 backend (Fedora Workstation ships both;
+/// `xclip` it does not). Bounded, because an owner that never answers holds the read.
+const READ_X_CLIPBOARD: &str = "timeout -k 2 5 python3 -c \"import gi; gi.require_version('Gtk', '3.0'); \
+     from gi.repository import Gtk, Gdk; \
+     print(Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text() or '', end='')\"";
+
+/// Own the X `CLIPBOARD` with `text` for a minute, detached: the owner has to stay alive to
+/// answer vdagent's request, and left on the ssh channel it would hold the channel open.
+fn own_x_clipboard(text: &str) -> String {
+    format!(
+        "setsid --fork timeout 60 python3 -c \"import gi, sys; gi.require_version('Gtk', '3.0'); \
+         from gi.repository import Gtk, Gdk, GLib; \
+         Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(sys.argv[1], -1); \
+         GLib.timeout_add_seconds(55, Gtk.main_quit); Gtk.main()\" '{text}' \
+         >/dev/null 2>&1 </dev/null"
     )
 }
 
@@ -346,9 +384,7 @@ fn a_seated_guest_shares_the_clipboard_through_spice_vdagent() {
     let deadline = Instant::now() + CROSS;
     let last;
     loop {
-        // Bounded: a selection owner that never answers holds `wl-paste` (and the ssh) forever,
-        // which would turn a failure into an hour-long hang instead of this oracle's verdict.
-        let seen = ssh_soft(&guest, &in_session("timeout -k 2 5 wl-paste --no-newline"));
+        let seen = ssh_soft(&guest, &in_x(READ_X_CLIPBOARD));
         if seen.contains(to_guest) {
             last = seen;
             break;
@@ -366,16 +402,7 @@ fn a_seated_guest_shares_the_clipboard_through_spice_vdagent() {
 
     // --- Oracle 5: guest → host ---
     let to_host = "limina-guest-copy-9265";
-    // `wl-copy` must STAY RESIDENT to serve the selection, so it has to be detached from the
-    // ssh channel: left attached it holds the channel's fds open and ssh never returns, which
-    // looks like a hung test rather than a working clipboard (it hung for 10 minutes on
-    // 2026-08-15 while the copy itself was perfectly fine).
-    ssh_soft(
-        &guest,
-        &in_session(&format!(
-            "setsid --fork wl-copy '{to_host}' >/dev/null 2>&1 </dev/null"
-        )),
-    );
+    ssh_soft(&guest, &in_x(&own_x_clipboard(to_host)));
     let deadline = Instant::now() + CROSS;
     loop {
         if limina_test::pasteboard_text(&pb_name).as_deref() == Some(to_host) {

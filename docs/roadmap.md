@@ -646,8 +646,11 @@ scope — limina's EDID/mode machinery already does it natively.
   claim the clipboard, and the host routes to the SPICE transport plus whichever peers claimed.
   vdagentd serves only the logind-active session; the chosen shape is that native claims in inactive
   sessions and SPICE serves the active one.
-- Traps: `wl-copy` over ssh does not set the clipboard (no input serial) — verify with `wl-paste`,
-  or use `xclip` on `DISPLAY=:0`.
+- Traps: over ssh on a stock mutter, `wl-copy` and `wl-paste` reach the selection only through a
+  focused window, which a window mapped from ssh never gets, so both block. Drive the X
+  `CLIPBOARD` on `DISPLAY=:0` instead (mutter's `XAUTHORITY`; the images have GTK 3's Python
+  bindings but no `xclip`), as `l2_clipboard_vdagent.rs` does. The Wayland tools work over ssh only
+  where the compositor offers data-control.
 
 **Owed (sequenced: synoik gains selection bridging first; these stay booked):**
 - **Invert the probe** — claim when our own `ext_data_control_manager_v1` bind succeeds, not when

@@ -1542,7 +1542,8 @@ it. Landing it renames the cards once more. A guest udev rule giving virtio devi
 ### Automated coverage gaps in the session helper
 `limina-agent-session`'s ext-data-control backend (`guest/limina-agent-session/src/wayland_clip.rs`)
 is verified live only: `l1_session_helper.rs` exercises the RemoteDesktop path and
-`l2_clipboard_vdagent.rs` deliberately stops the helper. Nothing automated covers helper reconnect
+`l2_clipboard_vdagent.rs` deliberately stops the helper. The F44 enhanced GNOME images run Fedora's
+mutter, which has no ext-data-control, so they cannot host even the live check any more. Nothing automated covers helper reconnect
 after a supervisor restart or after the D-Bus session dies. (Per-peer serials and stale-offer
 rejection are covered by `l1_clipboard_multi_session.rs`.) The seat gate in `layout_gate.rs` is
 unit-tested through `poll` with the seat state passed in, and `seat_owner_is` on sample seat
