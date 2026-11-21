@@ -346,7 +346,9 @@ fn a_seated_guest_shares_the_clipboard_through_spice_vdagent() {
     let deadline = Instant::now() + CROSS;
     let last;
     loop {
-        let seen = ssh_soft(&guest, &in_session("wl-paste --no-newline"));
+        // Bounded: a selection owner that never answers holds `wl-paste` (and the ssh) forever,
+        // which would turn a failure into an hour-long hang instead of this oracle's verdict.
+        let seen = ssh_soft(&guest, &in_session("timeout -k 2 5 wl-paste --no-newline"));
         if seen.contains(to_guest) {
             last = seen;
             break;
