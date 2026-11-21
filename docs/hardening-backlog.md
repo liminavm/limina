@@ -1829,7 +1829,7 @@ that reproduces it (loop the test under suite-like load with the VM held on fail
 one outlier while the rest sit at 50–550 ticks: 1732 ticks (2026-10-18), 3751 ticks (2026-10-19,
 next to a 404013/396739 spacing pair, i.e. one late wake that the next one caught up), 2177 and
 3201 ticks (2026-10-23, two suite runs in a row, each beside the same kind of spacing pair), 1697
-ticks (2026-11-21, beside a 401993/398703 pair). All were under a full suite; the test passed alone
+and 3613 ticks (2026-11-21, two suite runs, beside 401993/398703 and 403888/396799 pairs). All were under a full suite; the test passed alone
 straight after (three runs in a row on 2026-10-23, every error within 270 ticks, and again on
 2026-11-21). Open: whether the outlier is guest
 scheduling (the wake latencies the test prints reach 2.6 ms), the host vsync source, or the push
@@ -1847,6 +1847,13 @@ of 10 on those of 2026-11-20, so not a guest-update regression; the same line al
 range, and stops the VM only past a per-page cap. Open: whether a stray is ever anything but that
 race (then the oracle should count only the capped, fatal case) or a hole in the bookkeeping the
 retry is hiding.
+
+### `custom_guest_mac_keeps_the_static_lease_and_ssh_forward_on_netd` once got a banner but no login
+Seen once under a full suite (2026-11-21): the NIC carried the custom MAC and the netd forward
+answered `SSH-2.0-OpenSSH_10.2`, but `Guest::wait_for_ssh` (`net.rs`) established no session within
+its 30 s, the last ssh attempt itself killed at 30 s. It passed alone straight after, three runs in a
+row. Open: whether the session stalls in the guest (sshd or PAM under load) or on netd's forward
+after the banner; the next sighting wants the guest journal and netd's log kept.
 
 ### Watch `l1_real_session_helper_bridges_clipboard_via_mock_mutter` for a second failure
 Seen once (2026-08-04): the mock log reached `CLAIMED_NAME / CREATE_SESSION / START / ENABLE_CLIPBOARD`, but
