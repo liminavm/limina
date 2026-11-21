@@ -314,6 +314,9 @@ fn seated_gpu_workload_survives_restore_unchanged() {
         .expect("guest sshd never became reachable through the forward");
     g1.ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
         .expect("gnome-shell never appeared — the seated session didn't come up");
+    // The update machinery's banner lands at the top of the screen between the two captures,
+    // and reads as moved landmarks whenever Fedora has published updates the image lacks.
+    limina_test::quiesce_desktop(&g1);
 
     // Premise guard: the workload has to exist in the image, or every oracle below reduces to
     // a bare desktop and the gate silently stops covering what it claims to.
