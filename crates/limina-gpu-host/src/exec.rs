@@ -696,6 +696,8 @@ const FILL_TRIES: usize = 100;
 pub struct Placeholders {
     textures: BTreeMap<u64, Po<dyn MTLTexture>>,
     samplers: BTreeMap<u64, Po<dyn MTLSamplerState>>,
+    /// Sampler placeholders made so far, which names the next one.
+    sampler_serial: u64,
 }
 
 /// The two resource ID spaces: textures (views included) and samplers.
@@ -748,8 +750,16 @@ impl Placeholders {
                 Ok(id)
             }
             Space::Sampler => {
+                // Metal answers an equal descriptor with the sampler it already made, ID and all,
+                // and the label is part of what it compares: a label of its own makes each
+                // placeholder a new sampler, and one no guest sampler can equal.
+                self.sampler_serial += 1;
                 let d = MTLSamplerDescriptor::new();
                 d.setSupportArgumentBuffers(true);
+                d.setLabel(Some(&NSString::from_str(&format!(
+                    "limina restore placeholder {}",
+                    self.sampler_serial
+                ))));
                 let st = device
                     .newSamplerStateWithDescriptor(&d)
                     .ok_or(Error::OutOfMemory)?;
@@ -2966,5 +2976,49 @@ impl Executor {
         };
         self.reap();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A restore reaches a sampler's recorded ID by holding every lower one with a placeholder,
+    /// so each placeholder has to take an ID of its own. Metal hands an equal descriptor back the
+    /// sampler it already made, ID and all, so placeholders made alike would all be one sampler
+    /// and the fill would never get past it.
+    #[test]
+    fn every_sampler_placeholder_takes_a_new_id() {
+        let device = metal::system_device().expect("no Metal device");
+        let mut p = Placeholders::default();
+        let ids: Vec<u64> = (0..8)
+            .map(|_| {
+                p.grow(Space::Sampler, &device)
+                    .expect("placeholder sampler")
+            })
+            .collect();
+        let distinct: BTreeSet<u64> = ids.iter().copied().collect();
+        assert_eq!(
+            distinct.len(),
+            ids.len(),
+            "placeholder sampler IDs repeat: {ids:?}"
+        );
+    }
+
+    /// A placeholder must not be the guest's own sampler either: one that equals a sampler the
+    /// guest makes would take that sampler's ID while the placeholder still holds it.
+    #[test]
+    fn a_sampler_placeholder_is_not_a_default_sampler() {
+        let device = metal::system_device().expect("no Metal device");
+        let d = MTLSamplerDescriptor::new();
+        d.setSupportArgumentBuffers(true);
+        let guest = device
+            .newSamplerStateWithDescriptor(&d)
+            .expect("guest sampler");
+        let mut p = Placeholders::default();
+        let id = p
+            .grow(Space::Sampler, &device)
+            .expect("placeholder sampler");
+        assert_ne!(id, resource_id(guest.gpuResourceID()));
     }
 }
