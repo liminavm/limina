@@ -2,18 +2,21 @@
 # linux — patch-audit ledger
 
 **Fork model since 2026-08-03.** There is no `patches/linux/` series any more: our kernel changes
-are commits on **`github.com/liminavm/linux`** branch **`limina`**, base **`v7.1.13`**, pinned in
+are commits on **`github.com/liminavm/linux`** branch **`limina`**, base **`v7.3.5`**, pinned in
 `third_party/manifest.toml`. The fork's parent is **`gregkh/linux`** (the stable-tree mirror) —
 `torvalds/linux` has no stable point-release tags. Regenerate the series as a build artifact with
-`scripts/export-linux-patches.sh` (`git format-patch base..rev`).
+`scripts/export-linux-patches.sh` (`git format-patch base..rev`). Rebased 2026-11-21 onto
+`v7.3.5` from `v7.1.13`; the old tip is tagged `pre-rebase-2026-11-20` (`a8224c00`). Both commits
+replayed, and "drm/virtio: import guest-blob dmabufs into a 3D context again" joined.
 
-2 commits. Schema + protocol: `README.md`. Rows are keyed by SUBJECT; ordinals are informational
+3 commits. Schema + protocol: `README.md`. Rows are keyed by SUBJECT; ordinals are informational
 and drift on re-export.
 
 | ord | subject | files | diag | need | checked | issue | mr | sec | fold | tier | disp | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 0001 | drm/virtio: expose per-scanout rects as suggested connector offsets | `drivers/gpu/drm/virtio/virtgpu_display.c`, `virtgpu_vq.c`, `virtgpu_drv.h` |  | **needed** — no driver reads the rect position; qxl is the only precedent | `v7.1.13` `virtgpu_display.c` (read 2026-10-16: still size-only, no suggested_x/y, no `hotplug_mode_update`) | none-yet | none-yet | no | standalone | guest-enhanced | **upstream-now** | the guest half of the host→guest arrangement relay; mutter gates the offsets on `hotplug_mode_update`, so the two halves must go together |
-| 0002 | drm/virtio: type and attach PRIME-imported dmabufs | `drivers/gpu/drm/virtio/virtgpu_prime.c` |  | **needed** — `bo->blob_mem` is still unset on the import path and `virtgpu_dma_buf_funcs` still carries only `.free` | `v7.1.13` `virtgpu_prime.c` (read 2026-10-16: still sets only `params.blob_mem`; dma-buf funcs carry no `.open`/`.close`) | none-yet | none-yet | no | standalone | guest-enhanced (the bug hits any guest whose glupload picks the DirectDmabuf uploader; 16 KiB pages are what make that the default here) | **upstream-now** | a plain driver bug with a self-contained fix and a measured symptom — the cleanest upstream candidate we carry; see the finding below |
+| 0001 | drm/virtio: expose per-scanout rects as suggested connector offsets | `drivers/gpu/drm/virtio/virtgpu_display.c`, `virtgpu_vq.c`, `virtgpu_drv.h` |  | **needed** — no driver reads the rect position; qxl is the only precedent | `v7.3.5` `drivers/gpu/drm/virtio/` (read 2026-11-21: no `suggested_x`/`suggested_y` and no `hotplug_mode_update` anywhere in the driver) | none-yet | none-yet | no | standalone | guest-enhanced | **upstream-now** | the guest half of the host→guest arrangement relay; mutter gates the offsets on `hotplug_mode_update`, so the two halves must go together |
+| 0002 | drm/virtio: type and attach PRIME-imported dmabufs | `drivers/gpu/drm/virtio/virtgpu_prime.c` |  | **needed** — `bo->blob_mem` is still unset on the import path and `virtgpu_dma_buf_funcs` still carries only `.free` | `v7.3.5` `virtgpu_prime.c` (read 2026-11-21: still sets only `params.blob_mem` (:256); `virtgpu_gem_dma_buf_funcs` carries only `.free` (:315), no `.open`/`.close`; but :352 keeps a 3D device off this import path, so on one the fix needs the guest-blob import commit below — see *The guest-blob import on a 3D device*) | none-yet | none-yet | no | standalone | guest-enhanced (the bug hits any guest whose glupload picks the DirectDmabuf uploader; 16 KiB pages are what make that the default here) | **upstream-now** | a plain driver bug with a self-contained fix and a measured symptom — the cleanest upstream candidate we carry; see the finding below |
+| 0003 | drm/virtio: import guest-blob dmabufs into a 3D context again | `drivers/gpu/drm/virtio/virtgpu_prime.c` |  | **needed** — reverts upstream `1e3b08de6327`, which makes a 3D device refuse the import | `v7.3.5` `virtgpu_prime.c` (read 2026-11-21: `if (!vgdev->has_resource_blob \|\| vgdev->has_virgl_3d)` at :352 hands every import on a 3D device to `drm_gem_prime_import`) | n/a | n/a | no | standalone (the PRIME-typing commit needs it on a 3D device) | guest-enhanced | **carry** | not upstreamable in this form; see the finding below |
 
 ## Left the series
 
@@ -319,7 +322,27 @@ the next — two here, two in guest Mesa (`docs/upstreaming/ledger/kosmickrisp-g
 vrend. Fixing any one alone changes the symptom and not the outcome, which is exactly how a
 partial fix reads as a wrong theory. Measure the *next* hop after every fix, not the pixels.
 
-### Load-bearing references
+#### The guest-blob import on a 3D device (2026-11-21)
+
+**(a) Capability.** On a 3D-enabled virtio-gpu, a dmabuf from another device (the `/dev/udmabuf`
+frames `glupload` imports on a 16 KiB guest) is imported as a guest blob, the path the PRIME-typing
+commit above types and attaches, instead of going through the generic `drm_gem_prime_import`.
+
+**(b) Stock guest without it.** From `v7.3` upstream refuses that import whenever the device has
+3D (`1e3b08de6327`, `virtgpu_prime.c:352` at `v7.3.5`), so the dmabuf takes the generic path. The
+guest boots and runs; per the commit message, imported video frames then never reach the host as a
+typed, context-attached resource. Not measured here.
+
+**(c) Host-side alternative.** None: the refusal is made in the guest kernel, and the host never
+sees the import.
+
+**(d) Exit.** Upstream withdrew the import because vrend in the C virglrenderer cannot take guest
+blobs. The upstreamable shape is a capability the device advertises when its renderer serves guest
+blobs, gating this check; with that in a released kernel, this commit dissolves into "a new enough
+kernel". Until then it also bounds the PRIME-typing fix's exit: that fix alone does not help a
+stock `v7.3`+ guest on a 3D device.
+
+## Load-bearing references
 
 - `42fd9e6c29b3` — the format narrowing, read from the tree 2026-08-03 (supersedes this ledger's earlier 2017 citation)
 - `85faca8ca0f6` — `fb_modifiers_not_supported`, read from the tree 2026-08-03

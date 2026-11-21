@@ -97,7 +97,7 @@ rev = "3f7721ff32a83f5d9a545f8fc5ad7b6587c4c2bd"
 repo = "https://github.com/liminavm/mlx.git"
 upstream = "https://github.com/ml-explore/mlx.git"
 branch = "limina"
-rev = "4cb085bae579f1edb6043d3ca8e317ccca6642a4"
+rev = "6786d6ddb66a996938d5b4ec3e70c11258444bdb"
 
 # The OpenCL C standard library KosmicKrisp's kernels are compiled against. NOT a source
 # checkout and not merely a configure-time gate: `src/kosmickrisp/libkk/*.cl` (tessellation,

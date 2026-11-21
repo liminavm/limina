@@ -12,29 +12,29 @@ docs-only.
 
 ## Scope
 
-As of 2026-11-02: commits on each pinned fork branch, every one of which now has a ledger row.
+As of 2026-11-21: commits on each pinned fork branch, every one of which now has a ledger row.
 Rows added on 2026-10-16 are phase-0 skeletons (unresearched first guesses), so the per-patch
 verdicts below cover only the series' state at the 2026-08-03 audit. `cargo xtask ledger`
 re-derives the commit counts.
 
 | series | commits | base | tracker |
 |---|---|---|---|
-| linux | 2 | `v7.1.13` (`gregkh/linux` stable mirror) | lore.kernel.org |
-| kosmickrisp (host KK, `limina-kk`) | 142 | mesa main `bd830ce2` | gitlab.fd.o (Anubis) |
-| kosmickrisp-guest (`metal-native-context`; KK bridge + guest venus/virgl/zink fixes) | 29 | `limina-kk` pin `2c757c01` | gitlab.fd.o (Anubis) |
+| linux | 3 | `v7.3.5` (`gregkh/linux` stable mirror) | lore.kernel.org |
+| kosmickrisp (host KK, `limina-kk`) | 142 | mesa main `3bce06a0` | gitlab.fd.o (Anubis) |
+| kosmickrisp-guest (`metal-native-context`; KK bridge + guest venus/virgl/zink fixes) | 29 | `limina-kk` pin `2b27e76a` | gitlab.fd.o (Anubis) |
 | imago | 1 | `ff96e18` (0.2.6) | gitlab.com |
 | mutter | RETIRED | — | series removed 2026-08-03 (own compositor) |
 | virglrenderer (C; pinned by virglrs) | 181 C-tree (616 with the Rust rewrite) | upstream main `aafa9bd2` | gitlab.fd.o (Anubis) |
-| libkrun | 347 | `a0375321` | github.com/libkrun/libkrun |
-| mlx | 2 | `ml-explore/mlx` main `b6642e6` | github.com/ml-explore/mlx |
-| **total** | **704** | | |
+| libkrun | 347 | `abe0a0f6` | github.com/libkrun/libkrun |
+| mlx | 2 | `ml-explore/mlx` main `dc5ea6e` | github.com/ml-explore/mlx |
+| **total** | **705** | | |
 
 **Superseded since 2026-08-03 (per-series detail in each file):**
 
 - libkrun 0029 (capset count): upstream `c5d974cd` "fix #565" is in the base. 0119's aspect-shift
   half is fixed by upstream `766da0c7`, while its u16 clock wrap is still in the base. 0058 no
-  longer exists as a commit: its vsock-thread fix is inside `ec2aaa09` (row 0056), and its
-  eventfd half is `b767ae40`.
+  longer exists as a commit: its vsock-thread fix is inside `6618ffcf` (row 0056), and its
+  eventfd half is `5110faca`.
 - KK 0006 (depth_clip_enable) left the branch at the 2026-10-14 rebase, because base `d44453ce`
   carries the !43421 superset. Upstream KK already advertises `VK_EXT_external_memory_metal`
   (MTLHEAP), so the MTLHEAP work item below is done upstream; only our MTLTEXTURE handle type is
@@ -49,6 +49,9 @@ re-derives the commit counts.
   KK's own geometry-shader port and its adjacency-unroll poly commit (upstream `5c145789399`,
   `14f59d06388` and `531e208d92e`, with limina's features re-ported on top); the guest venus
   missing-bo fix (upstream `b9174e097b1`).
+- Left at the 2026-11-21 rebase: libkrun 0004 (halfword MMIO writes, upstream `302d447d`), 0005
+  (PL011 `arm,primecell`, upstream `925c003e`), 0014 (scanout readback panic, upstream `2fc56b5b`)
+  and the SME mask on every vCPU (upstream `2ddb5d71`).
 
 The headline, send queue and action items below are the 2026-08-03 roll-up and have not been
 re-judged. Read them with the list above. Several new upstream candidates and security-relevant
