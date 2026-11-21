@@ -53,8 +53,8 @@ base = "ff96e18ce872bb3dec4f1f2d178fc41dc89d3bf6"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-kk"
-rev = "2c757c014c4b73d7b8a09c59520fff8f3a1859c4"
-base = "bd830ce2eead03d775486234902fe22215e334b8"
+rev = "2b27e76a1d7a56eb46aa1d0b9e1b3c0b67df188f"
+base = "3bce06a054eb534474d0b030e50d41a0e5536b44"
 tree = "/Volumes/mesa-cs/mesa"
 
 # limina's guest GPU drivers (the vendor build, -Dlimina-vendor=true): KosmicKrisp on the
