@@ -66,8 +66,8 @@ tree = "/Volumes/mesa-cs/mesa"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "metal-native-context"
-rev = "0c590953a77f30f80ad764d5eddb4275a717f522"
-base = "2c757c014c4b73d7b8a09c59520fff8f3a1859c4"
+rev = "c0a873da495d83c604401872013f8655f33e2dc0"
+base = "2b27e76a1d7a56eb46aa1d0b9e1b3c0b67df188f"
 tree = "/Volumes/mesa-cs/mesa-metal-guest"
 
 # The host GPU renderer, consumed by rutabaga as a Rust crate — nothing here is loaded at
