@@ -12,7 +12,7 @@ worker, clock skew +0.218 s across a 15 s gap). Phase 2: defer-and-classify ship
 new L2 `venus_session_survives_inplace_s2idle` — RED reproduced the exact predicted wipe
 (gnome-shell +1 coredump, "destroying context 3 (gnome-shell)"), GREEN logs the designed flow
 ("device reset with a quiescent session — PARKED" → "adopting the parked session across a
-bus-fallback thaw (no replay needed)") with the same shell pid and zero cores. Phase 3: worker-side
+thaw (no replay needed)") with the same shell pid and zero cores. Phase 3: worker-side
 IOKit listener (`limina-vmm/src/power.rs`, `IORegisterForSystemPower` on a dedicated CFRunLoop
 thread), wake-ownership state machine unit-tested (5 cases incl. the late-suspend recovery and
 user-suspended-guest cases), `--on-host-sleep s2idle|ignore` on worker + supervisor, `vm.toml
@@ -45,11 +45,17 @@ Constraint (two-tier doctrine): the mechanism must work for **stock guests** —
 
 ## 2. The state of the substrate (all verified in source / measured)
 
-- **The thaw reset is guest-side and unavoidable on stock.** `virtgpu_drv.c` registers no PM ops
-  (verified at 7.1.2 + `/proc/kallsyms` live), so the virtio core's bus fallback resets the GPU on
-  every s2idle thaw: reset → re-negotiate → DRIVER_OK with **zero queue writes** (M9.3 MMIOTRACE:
-  every other device re-programs queue geometry; the GPU writes status only). Upstream-broken for
-  any spec-faithful device; QEMU guests should wedge identically.
+- **The thaw reset is guest-side and unavoidable on stock**, in one of two shapes:
+  - **Through 7.2**, `virtgpu_drv.c` registers no PM ops (verified at 7.1.2 + `/proc/kallsyms`
+    live), so the virtio core's bus fallback resets the GPU on every s2idle thaw: reset →
+    re-negotiate → DRIVER_OK with **zero queue writes** (M9.3 MMIOTRACE: every other device
+    re-programs queue geometry; the GPU writes status only). Upstream-broken for any
+    spec-faithful device; QEMU guests should wedge identically.
+  - **From 7.3**, `virtgpu_freeze` resets the device and deletes its queues on every system
+    sleep, and `virtgpu_restore` programs fresh ones. It re-creates objects only after
+    hibernation (refused with 3D), so on s2idle it too relies on the device keeping its world.
+  - Neither shape reads the device features: `virtio_device_restore_priv` writes back the ones
+    cached at probe, while every probe (Linux's `virtio_dev_probe`, Cardea's driver) reads them.
 - **The transport half is already solved for in-place resume.** libkrun 0072's sticky queue re-arm
   (`mmio.rs rearm_queues_from_stash`) reconstructs queues from the previous activation's register
   file when DRIVER_OK arrives with none programmed — its own doc comment names "in-place resume"
@@ -81,11 +87,15 @@ Nothing is stale on either side. Keep the world and the session survives **with 
    sw2d, scanouts, journal — which keeps recording, the session continues — cursor state,
    rutabaga session state, present-fence plumbing; unbind only the transport, `active = None`).
    If the drain times out → run `reset_session` now (fail-closed: exactly today's behavior).
-2. **At the next activation, classify by 0072's own signature:**
-   - Re-arm path fired (DRIVER_OK, **no queues programmed** this cycle) **and** a parked session
-     exists → **thaw**: adopt the parked world unchanged. Session preserved by construction.
-   - Queues **were** programmed (reboot, driver rebind, firmware→kernel hand-off, kexec) →
-     run the deferred `reset_session` first, then proceed — semantics identical to today.
+2. **At the next activation, classify by whether the driver probed** (`mmio.rs`
+   `features_read`):
+   - DRIVER_OK after an earlier activation **without a device-features read** this cycle, and a
+     parked session exists → **thaw**: adopt the parked world unchanged, whether the queues were
+     re-armed (bus fallback) or programmed afresh (7.3's `.restore`). Session preserved by
+     construction.
+   - The driver **read the device features** (driver rebind, firmware→kernel hand-off, kexec) →
+     run the deferred `reset_session` first, then proceed. A guest reboot exits the worker, so
+     no parked session outlives it.
 3. **Disjoint from the snapshot path by construction:** staged-replay only exists on a fresh
    worker (`pending_restore`), parked-session adoption only on a live worker that Deactivated;
    the two cannot coincide. The fresh-worker restore leg is untouched.
