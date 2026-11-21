@@ -61,16 +61,16 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
 guest with `rpm -q`; the GPU drivers by `/opt/limina/<wire>/MESA_REV` and `dkms status`. The F44
-enhanced row is what payload r44 installs and `deliver-payload.sh` verifies on each image (agent
+enhanced row is what payload r46 installs and `deliver-payload.sh` verifies on each image (agent
 hashes, the drivers' `MESA_REV`, no limina mesa RPM or driver-selection file, the 16k kernel's
 virtio-gpu resolving to DKMS's module). The dogfood row was read with `uname -r`, `rpm -q`, `dkms
-status` and the vendor tree's `MESA_REV` on the dev VM 2026-10-25. All four F44 enhanced images boot `7.1.13-limina16k.2` as their permanent default. The synoik image never reaches `multi-user.target` (its `plymouth-quit-wait` hangs), so `limina-kernel-promote.service` never fires there: after its trial boot, promote by hand with the unit's own two steps (`grubby --set-default=/boot/vmlinuz-<KREL>`, then disable the unit).
+status` and the vendor tree's `MESA_REV` on the dev VM 2026-10-25. All four F44 enhanced images boot `7.3.5-limina16k` as their permanent default. The synoik image never reaches `multi-user.target` (its `plymouth-quit-wait` hangs), so `limina-kernel-promote.service` never fires there: after its trial boot, promote by hand with the unit's own two steps (`grubby --set-default=/boot/vmlinuz-<KREL>`, then disable the unit).
 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F44 pristine** (`vanilla`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 stock + freeworld VA** (`accessible`, `stock.test`, `tpm.test`, `metal.test`; updated 2026-11-04) | `7.2.15-200.fc44` (`6.19.10-300.fc44` kept as the fallback entry) | 4 KiB | `26.2.6-1.fc44` + `mesa-va-drivers-freeworld-26.2.6-1.fc44` | `50.6-2.fc44` | `50.6` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) | `limina-kernel-16k-7.1.13-2` (+ `-devel`; virtio-gpu is limina's DKMS module `fcb50744a86d`) | 16 KiB | **stock** `26.2.5-1.fc44` (distro-synced by the installer), plus the vendor drivers under `/opt/limina/5` (`[kosmickrisp-guest]` `6f28899c867`) | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 stock + freeworld VA** (`accessible`, `stock.test`, `tpm.test`, `metal.test`; updated 2026-11-20) | `7.3.4-200.fc44` (`7.2.15-200.fc44` and `6.19.10-300.fc44` kept as fallback entries; on `metal.test` virtio-gpu is limina's DKMS module `aeeb348a6dad`) | 4 KiB | `26.2.7-1.fc44` + `mesa-va-drivers-freeworld-26.2.7-1.fc44` | `50.6-2.fc44` | `50.6` |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`; distro packages updated 2026-11-20) | `limina-kernel-16k-7.3.5-1` (+ `-devel`; `7.1.13-limina16k.2` kept as the fallback; virtio-gpu is limina's DKMS module `aeeb348a6dad`) | 16 KiB | **stock** `26.2.7-1.fc44`, plus the vendor drivers under `/opt/limina/5` (`[kosmickrisp-guest]` `6f28899c867`) | `50.6-2.fc44` (stock) | `50.6` (stock) |
 | **F44 dogfood deployment** (the user's dev VM) | `limina-kernel-16k-7.1.13-2` (+ `-devel`; default `7.1.13-limina16k.2`, `7.1.13-1` and `7.1.9-1` kept as fallbacks; virtio-gpu is limina's DKMS module `0ba8d2a74e68`) | 16 KiB | **stock** `26.2.4-1.fc44`, plus the vendor drivers under `/opt/limina/5` (`MESA_REV` `20cf1a304e0`, an earlier cut of the buffer-view bound, with `libgallium` replaced by hand by the `a2d20db7dab` build, md5 `1511c7b8…`; the original kept as `~/libgallium-26.3.0-devel.so.before-zink-evict`) | n/a: synoik | n/a: synoik |
 
 Two facts the table cannot show:
@@ -78,7 +78,7 @@ Two facts the table cannot show:
 - **The guest agents are not RPMs and so are not in the table.** All four F44 enhanced images
   (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) carry **`limina-agent` 0.6.2**
   and **`limina-agent-session` 0.1.4**, installed to `/usr/local/bin` with their units (payload
-  **r44**; the binaries are rebuilt from r42's sources). The dogfood guest:
+  **r46**; the binaries are rebuilt from r42's sources). The dogfood guest:
   - is current on `limina-agent`: 0.6.2, the r39 binary installed by hand 2026-10-23, with 0.6.1
     kept beside it as `limina-agent.0.6.1.bak`;
   - is current on `limina-agent-session`: 0.1.4, the r38 binary installed by hand 2026-10-22, with
@@ -101,10 +101,13 @@ Two facts the table cannot show:
   the floor for dynamic vCPU offlining. Check the version in a guest with `limina-agent --version`, which is also the
   fastest way to tell a stale image from a fresh one.
 
-- **The limina kernel branch carries two drm/virtio commits**, both upstream-now candidates:
-  per-scanout rects exposed as suggested connector offsets (the guest half of the arrangement
-  relay), and typing + context-attaching PRIME-imported dmabufs (without it every
-  software-decoded video frame is untyped host-side — `docs/graphics.md` §3.2). The
+- **The limina kernel branch carries three drm/virtio commits**: per-scanout rects exposed as
+  suggested connector offsets (the guest half of the arrangement relay), and typing +
+  context-attaching PRIME-imported dmabufs (without it every software-decoded video frame is
+  untyped host-side — `docs/graphics.md` §3.2), both upstream candidates; and a revert of
+  7.3's revert of dmabuf import into a 3D context, which upstream withdrew because vrend cannot
+  take guest blobs while limina's renderer can (the upstreamable shape is a device capability
+  gating that check). The
   `mm/page_reporting` freezable-workqueue commit was absorbed upstream at the v7.1.8 rebase, and
   the two DRM format/modifier commits were deliberately dropped (see §"Stock virtio-gpu formats"
   below). We would still build the kernel ourselves with no delta at all, for the **16 KiB page
@@ -153,10 +156,11 @@ The enhanced tier is a **payload**, `payload/limina-guest-tools-f44-rNN.tar.zst`
 which `install-enhanced.sh` applies inside a running stock or enhanced guest. The guest keeps its
 distro's Mesa; nothing of the distro's is replaced, locked or shadowed.
 
-**Current payload: `payload/limina-guest-tools-f44-r44.tar.zst`** — `limina-kernel-16k-7.1.13-2`
-(+ `-devel`, r43's RPMs), the GPU drivers `/opt/limina/5` at `[kosmickrisp-guest]` `6f28899c867` with DKMS
-`limina-virtio-gpu` `fcb50744a86d` (series 6.19, 7.1, 7.2; the module source is r42's), `limina-agent` 0.6.2,
-`limina-agent-session` 0.1.4. Applied to all four F44 enhanced images (`.bak-pre-r44.raw` CoW
+**Current payload: `payload/limina-guest-tools-f44-r46.tar.zst`** — `limina-kernel-16k-7.3.5-1`
+(+ `-devel`), the GPU drivers `/opt/limina/5` at `[kosmickrisp-guest]` `6f28899c867` (r44's) with DKMS
+`limina-virtio-gpu` `aeeb348a6dad` (series 6.19 and 7.2 from stable tags, 7.1 and 7.3 from the
+`[linux]` fork; the fork's 7.3 sources also serve stock 7.3 kernels), `limina-agent` 0.6.2,
+`limina-agent-session` 0.1.4. Applied to all four F44 enhanced images (`.bak-pre-r46.raw` CoW
 backups). Its `manifest.txt` lists the exact contents and hashes.
 
 What a payload contains (`scripts/package-enhanced.sh` writes it):
