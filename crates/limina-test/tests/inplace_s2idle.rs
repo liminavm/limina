@@ -596,6 +596,10 @@ fn venus_session_survives_inplace_s2idle() {
          worker={worker}"
     );
 
+    // Boot has its own reset to classify (the firmware hands the GPU to the kernel), so the
+    // worker's verdicts are counted from here on.
+    const WIPED: [&str; 2] = ["dropping the parked session", "InvalidContextId"];
+    let wiped_before = WIPED.map(|n| guest.supervisor_log().matches(n).count());
     suspend_in_guest_and_wait_dark(&guest);
     eprintln!("guest is asleep; waking in-place via the SIGWINCH seam");
     std::thread::sleep(Duration::from_secs(3));
@@ -641,6 +645,18 @@ fn venus_session_survives_inplace_s2idle() {
         shell_pid_after, shell_pid,
         "gnome-shell is a DIFFERENT process after the in-place wake — the session \
          restarted instead of being preserved"
+    );
+    // The same pid without a core is not a kept session: a shell on virgl survives the wipe and
+    // keeps submitting into contexts the host no longer has, which only the worker can see.
+    let wiped_after = WIPED.map(|n| guest.supervisor_log().matches(n).count());
+    assert_eq!(
+        wiped_after[0], wiped_before[0],
+        "the worker dropped the parked GPU session at the wake — the thaw was classified as a \
+         driver re-init"
+    );
+    assert_eq!(
+        wiped_after[1], wiped_before[1],
+        "the guest submitted into GPU contexts the host no longer has after the wake"
     );
 
     let outcome = guest
