@@ -700,6 +700,10 @@ pub struct Placeholders {
     sampler_serial: u64,
 }
 
+/// The most placeholders one object may need below it. Far more than any ID space Metal hands out
+/// (samplers come from a heap of a few thousand), so reaching it means the IDs stopped advancing.
+const GROW_LIMIT: usize = 1 << 16;
+
 /// The two resource ID spaces: textures (views included) and samplers.
 #[derive(Clone, Copy)]
 enum Space {
@@ -728,8 +732,20 @@ impl Placeholders {
         }
     }
 
-    /// Makes one more placeholder and returns the ID it took.
+    /// Makes one more placeholder and returns the ID it took. An ID a placeholder already holds
+    /// is no progress, and fails rather than letting the caller wait for one it will never get.
     fn grow(&mut self, space: Space, device: &Device) -> Result<u64, Error> {
+        let (id, fresh) = self.make_one(space, device)?;
+        if fresh {
+            Ok(id)
+        } else {
+            log::warn!("restore: a placeholder took resource ID {id} again");
+            Err(Error::Restore)
+        }
+    }
+
+    /// One placeholder, its ID, and whether that ID was new to the placeholders.
+    fn make_one(&mut self, space: Space, device: &Device) -> Result<(u64, bool), Error> {
         match space {
             Space::Texture => {
                 // SAFETY: plain descriptor construction.
@@ -746,8 +762,7 @@ impl Placeholders {
                     .newTextureWithDescriptor(&d)
                     .ok_or(Error::OutOfMemory)?;
                 let id = resource_id(t.gpuResourceID());
-                self.textures.insert(id, t);
-                Ok(id)
+                Ok((id, self.textures.insert(id, t).is_none()))
             }
             Space::Sampler => {
                 // Metal answers an equal descriptor with the sampler it already made, ID and all,
@@ -764,8 +779,7 @@ impl Placeholders {
                     .newSamplerStateWithDescriptor(&d)
                     .ok_or(Error::OutOfMemory)?;
                 let id = resource_id(st.gpuResourceID());
-                self.samplers.insert(id, st);
-                Ok(id)
+                Ok((id, self.samplers.insert(id, st).is_none()))
             }
         }
     }
@@ -987,12 +1001,21 @@ impl Executor {
             // Every lower slot is held, by a placeholder or a restored object: free the one for
             // `want` and take it.
             if !placeholders.release(space, want) {
-                loop {
-                    let id = placeholders.grow(space, &self.device)?;
-                    if id >= want {
+                let mut reached = false;
+                for _ in 0..GROW_LIMIT {
+                    if placeholders.grow(space, &self.device)? >= want {
                         placeholders.release(space, want);
+                        reached = true;
                         break;
                     }
+                }
+                if !reached {
+                    log::warn!(
+                        "restore: op {:#x}: {GROW_LIMIT} placeholders never reached resource ID \
+                         {want}",
+                        o.op
+                    );
+                    return Err(Error::Restore);
                 }
             }
             let (h, _, made) = self.make(o.op, &o.payload)?;

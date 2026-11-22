@@ -2448,6 +2448,41 @@ fn restore_into_fresh(g: Guest) -> Guest {
     }
 }
 
+/// A sampler the guest made after several others it destroyed sits that many resource IDs above
+/// where a fresh GPU host starts. The restore fills the slots below it with placeholders, which
+/// must each take a new ID: a GPU host that kept handing out the same one spun forever and
+/// answered nothing again (the dogfood's wedged session on 2026-11-22).
+#[test]
+fn a_sampler_far_above_a_fresh_hosts_first_id_restores() {
+    let mut g = start();
+    // Distinct descriptors, so these take distinct IDs whatever Metal shares between equal ones.
+    for (i, h) in (200..212).enumerate() {
+        let reply = g.reply_slot(RECORDS);
+        g.push(
+            cmd::CreateSampler {
+                handle: h,
+                _pad: 0,
+                desc: cmd::SamplerDesc {
+                    lod_max_clamp: 100.0 + i as f32,
+                    normalized_coordinates: 1,
+                    ..Default::default()
+                },
+                reply,
+            },
+            &[],
+        );
+        assert_eq!(g.reply(RECORDS).status, 0, "sampler {h}");
+    }
+    for h in 200..211 {
+        churn_destroy(&mut g, h);
+    }
+    let before = export(&mut g);
+    let mut g = restore_into_fresh(g);
+    let after = export(&mut g);
+    assert!(!after.lost, "restored lost: {:?}", g.ring.error());
+    assert_eq!(after, before);
+}
+
 /// Textures and samplers made and destroyed first, so the IDs a context holds have holes below.
 fn churn_ids(g: &mut Guest) {
     for h in 100..106 {
