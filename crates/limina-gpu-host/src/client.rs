@@ -430,12 +430,23 @@ fn spawn_process(exe: &Path) -> io::Result<libc::pid_t> {
     let path = CString::new(exe.as_os_str().as_bytes())
         .map_err(|_| io::Error::other("GPU host path has a NUL"))?;
     let argv = [path.as_ptr(), std::ptr::null()];
-    // The GPU host inherits our environment: RUST_LOG, and the Metal debug knobs.
-    unsafe extern "C" {
-        static environ: *const *const libc::c_char;
-    }
+    // The GPU host inherits our environment (RUST_LOG, and the Metal debug knobs), but not malloc
+    // stack logging: that is for the process it was asked of, and in the GPU host it slows every
+    // allocation of a restore that must answer within the call timeout.
+    let env: Vec<CString> = std::env::vars_os()
+        .filter(|(k, _)| !k.as_bytes().starts_with(b"MallocStackLogging"))
+        .filter_map(|(k, v)| {
+            let mut kv = k.as_bytes().to_vec();
+            kv.push(b'=');
+            kv.extend_from_slice(v.as_bytes());
+            CString::new(kv).ok()
+        })
+        .collect();
+    let mut envp: Vec<*const libc::c_char> = env.iter().map(|s| s.as_ptr()).collect();
+    envp.push(std::ptr::null());
     let mut pid = 0;
-    // SAFETY: valid NUL-terminated argv and environ; no file actions or attributes.
+    // SAFETY: valid NUL-terminated argv and envp, alive across the call; no file actions or
+    // attributes.
     let rc = unsafe {
         libc::posix_spawn(
             &mut pid,
@@ -443,7 +454,7 @@ fn spawn_process(exe: &Path) -> io::Result<libc::pid_t> {
             std::ptr::null(),
             std::ptr::null(),
             argv.as_ptr() as *const *mut libc::c_char,
-            environ as *const *mut libc::c_char,
+            envp.as_ptr() as *const *mut libc::c_char,
         )
     };
     if rc != 0 {

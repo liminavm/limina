@@ -244,9 +244,10 @@ cannot reach the running worker: libmalloc reads `MallocStackLogging` at exec. T
 every later worker of the run with `MallocStackLogging=lite`, and arms the VM's next start (a
 marker beside the suspend snapshot) — so *on, suspend, resume* gives a worker that records the
 stack of every allocation it keeps, C and framework code included, which the memory trace's census
-(Rust only) cannot name. That start disarms it. Read the stacks with
+(Rust only) cannot name. That start disarms it, and so does a resume from the parked window, which
+keeps the supervisor (and the lever, for its reboots). Read the stacks with
 `malloc_history <worker pid> -allByCount`; like `vmmap`, it suspends the worker while it reads.
-The GPU host inherits the variable from the worker.
+The GPU host does not inherit the variable.
 
 The SSH forward can move the same way, without touching the guest's network:
 `limina ssh-port <vm> <port>` (or the control center's network button on a running VM). The move

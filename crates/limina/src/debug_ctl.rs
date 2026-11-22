@@ -256,6 +256,15 @@ pub fn arm_next_start(snapshot: Option<&Path>) {
     *lock(&NEXT_START_MARKER) = Some(marker);
 }
 
+/// Drop the next-start marker without touching the lever: a resume in place took what it armed.
+pub fn disarm_next_start() {
+    if let Some(marker) = lock(&NEXT_START_MARKER).clone()
+        && std::fs::remove_file(&marker).is_ok()
+    {
+        log::info!("debug: {} consumed by this resume", marker.display());
+    }
+}
+
 /// Follow [`MALLOC_STACKS`] into the next start's marker. What the reply says is when it applies.
 fn set_next_start(on: bool) -> Vec<String> {
     let Some(marker) = lock(&NEXT_START_MARKER).clone() else {
@@ -774,6 +783,13 @@ mod tests {
         MALLOC_STACKS.set(false);
         arm_next_start(Some(&snapshot));
         assert!(!MALLOC_STACKS.on());
+
+        // A resume in place keeps the supervisor, so the lever stays on for its reboots, but the
+        // resume took what the marker armed.
+        lever(true);
+        disarm_next_start();
+        assert!(!marker.exists());
+        assert!(MALLOC_STACKS.on());
 
         // Turned off again before the suspend, nothing is left armed.
         lever(true);

@@ -760,6 +760,11 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
         args.push("--restore".into());
         args.push(pending.into_os_string());
         resumed = true;
+        // A resume in place (the parked window) is the start a malloc-stacks lever armed; this
+        // worker takes it, so a later start does not.
+        if crate::debug_ctl::worker_malloc_stacks().is_some() {
+            crate::debug_ctl::disarm_next_start();
+        }
     }
     if BOOT_MENU.swap(false, Ordering::SeqCst) {
         if resumed {
