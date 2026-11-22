@@ -203,7 +203,7 @@ The log filter and the supervisor's traces can change while the VM runs — the 
 an intermittent fault on a VM (dogfood included) that was started quietly. `RUST_LOG` and the
 levers' variables (`LIMINA_*_TRACE`, `LIMINA_INPUT_INJECT`, `LIMINA_DEBUG_PORT`,
 `LIMINA_NO_THROTTLE`) still set the
-starting values; nothing set at runtime outlives the run.
+starting values; nothing set at runtime outlives the run except `malloc-stacks` (below).
 
 ```sh
 limina debug <vm> status                         # both filters, every lever
@@ -214,6 +214,8 @@ limina debug <vm> lever input-inject on          # allow `limina input` (off by 
 limina debug <vm> lever debug-port on            # let the guest read the debug port (off by default)
 limina debug <vm> lever lifecycle-control on     # allow `limina reset` (off by default)
 limina debug <vm> lever no-throttle on           # keep App Nap off the supervisor (off by default)
+limina debug <vm> lever memory-trace on          # the worker's memory, and which Rust sites keep it
+limina debug <vm> lever malloc-stacks on         # next worker records every allocation's stack
 limina debug <vm> capture start <dir>            # every presented frame, tagged (docs/graphics.md §8)
 limina debug <vm> capture start --mode video <dir>  # the same frames as one movie per display
 limina debug <vm> capture stop
@@ -236,6 +238,15 @@ on, which keeps App Nap from slowing what goes on glass while the window is hidd
 awake, does not reach the worker (which App Nap does not touch), and does nothing against Game
 Mode. Traces inside libkrun (`LIMINA_GPU_TRACE`, `LIMINA_SND_TRACE`, …) are still
 environment-only.
+
+`malloc-stacks` (`LIMINA_MALLOC_STACKS`) is the one lever that reaches past the run, because it
+cannot reach the running worker: libmalloc reads `MallocStackLogging` at exec. Turning it on starts
+every later worker of the run with `MallocStackLogging=lite`, and arms the VM's next start (a
+marker beside the suspend snapshot) — so *on, suspend, resume* gives a worker that records the
+stack of every allocation it keeps, C and framework code included, which the memory trace's census
+(Rust only) cannot name. That start disarms it. Read the stacks with
+`malloc_history <worker pid> -allByCount`; like `vmmap`, it suspends the worker while it reads.
+The GPU host inherits the variable from the worker.
 
 The SSH forward can move the same way, without touching the guest's network:
 `limina ssh-port <vm> <port>` (or the control center's network button on a running VM). The move

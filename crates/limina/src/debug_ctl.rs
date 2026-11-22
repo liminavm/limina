@@ -15,7 +15,9 @@
 //! features that are off by default. They are a default-off posture, not a boundary against
 //! same-user code, which can flip them here.
 //!
-//! All of it lasts for this process only. See `limina_debug` for why.
+//! All of it lasts for this process only (see `limina_debug` for why), except `malloc-stacks`,
+//! which also arms the VM's next start: it applies only to a worker spawned after it is set, and
+//! the worker worth recording is usually a resume, which a new supervisor starts.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -70,6 +72,19 @@ pub static MEMORY_TRACE: Lever = Lever::new(
     "LIMINA_MEMORY_TRACE",
     "memory: periodic reports of what holds the worker's memory, and which Rust call sites keep \
      their allocations (sampled)",
+);
+/// Malloc stack logging in the worker (`MallocStackLogging=lite`), so `malloc_history` can name
+/// the call stack behind every live allocation, C and framework code included — what the
+/// memory trace's census cannot see. libmalloc reads the variable at exec, so the lever reaches
+/// no running worker: it applies to the next one (`worker_malloc_stacks`). The one lever that
+/// outlives this process, because the next worker is usually a resume, which a new supervisor
+/// starts: turning it on also arms the VM's next start (`arm_next_start`), and that start
+/// disarms it.
+pub static MALLOC_STACKS: Lever = Lever::new(
+    "malloc-stacks",
+    "LIMINA_MALLOC_STACKS",
+    "memory: record every allocation's stack in the next worker (a reboot, or the next start or \
+     resume) for malloc_history",
 );
 /// Records every input the trackpad policy reads (`window::input`'s recorder): to
 /// `LIMINA_TRACKPAD_RECORD`'s file when that names one, otherwise a new file beside the log.
@@ -134,6 +149,7 @@ pub static LEVERS: &[&Lever] = &[
     &QGA_TRACE,
     &PRESENT_COPY_TRACE,
     &MEMORY_TRACE,
+    &MALLOC_STACKS,
     &TRACKPAD_RECORD,
     &INPUT_INJECT,
     &DEBUG_PORT,
@@ -206,6 +222,78 @@ pub fn worker_memory_trace() -> &'static str {
     if MEMORY_TRACE.on() { "1" } else { "0" }
 }
 
+/// What a newly spawned worker's environment gets for malloc stack logging. Nothing while the
+/// lever is off, so a `MallocStackLogging` the supervisor was started with still reaches it.
+pub fn worker_malloc_stacks() -> Option<(&'static str, &'static str)> {
+    MALLOC_STACKS.on().then_some(("MallocStackLogging", "lite"))
+}
+
+/// The marker that arms [`MALLOC_STACKS`] for the VM's next start, set by [`arm_next_start`].
+static NEXT_START_MARKER: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Where the marker for a VM with this suspend snapshot lives: beside the snapshot, because the
+/// snapshot path is what names the VM to both a managed and a flat run, and because a resume —
+/// the start this is for — is the one that reads it.
+fn marker_for(snapshot: &Path) -> PathBuf {
+    snapshot.with_extension("malloc-stacks")
+}
+
+/// Read and disarm the VM's next-start marker, once per process before the first worker spawns:
+/// a marker left by the run before turns [`MALLOC_STACKS`] on for this one. Without a snapshot
+/// path (suspend not armed) the lever lasts this process only.
+pub fn arm_next_start(snapshot: Option<&Path>) {
+    let Some(marker) = snapshot.map(marker_for) else {
+        return;
+    };
+    if std::fs::remove_file(&marker).is_ok() {
+        MALLOC_STACKS.set(true);
+        log::warn!(
+            "debug: lever {} is on: armed by the last run ({} consumed)",
+            MALLOC_STACKS.name(),
+            marker.display()
+        );
+    }
+    *lock(&NEXT_START_MARKER) = Some(marker);
+}
+
+/// Follow [`MALLOC_STACKS`] into the next start's marker. What the reply says is when it applies.
+fn set_next_start(on: bool) -> Vec<String> {
+    let Some(marker) = lock(&NEXT_START_MARKER).clone() else {
+        return vec![
+            "applies from the next reboot of this run (no suspend path to arm a later \
+                     start with)"
+                .into(),
+        ];
+    };
+    let result = if on {
+        std::fs::write(&marker, b"")
+    } else {
+        std::fs::remove_file(&marker).or_else(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+    };
+    match (result, on) {
+        (Ok(()), true) => vec![format!(
+            "applies from the next worker: a reboot of this run, or the next start or resume \
+             ({} armed)",
+            marker.display()
+        )],
+        (Ok(()), false) => vec!["the next worker starts without it".into()],
+        (Err(e), _) => {
+            log::warn!("debug: could not update {}: {e}", marker.display());
+            vec![format!(
+                "applies from the next reboot of this run; the next start was not changed \
+                 ({}: {e})",
+                marker.display()
+            )]
+        }
+    }
+}
+
 /// The `RUST_LOG` a newly spawned worker gets, when the filter was changed at runtime.
 pub fn worker_rust_log() -> Option<String> {
     lock(&WORKER_FILTER).clone()
@@ -245,12 +333,18 @@ pub fn handle(req: &Request) -> Result<Vec<String>, String> {
                     log::warn!("debug: memory-trace not forwarded to the worker ({why})");
                 }
             }
+            let report = if std::ptr::eq(l, &MALLOC_STACKS) {
+                set_next_start(*on)
+            } else {
+                Vec::new()
+            };
             log::warn!(
-                "debug: lever {} is now {}",
+                "debug: lever {} is now {}{}",
                 l.name(),
-                if *on { "on" } else { "off" }
+                if *on { "on" } else { "off" },
+                report.first().map(|r| format!(": {r}")).unwrap_or_default()
             );
-            Ok(Vec::new())
+            Ok(report)
         }
         Request::Capture(wire::Capture::Start { dir, mode }) => {
             crate::window::frame_capture::start(Path::new(dir), *mode).map(|msg| vec![msg])
@@ -637,5 +731,64 @@ mod tests {
         (&stream).write_all(b"bogus\n").unwrap();
         assert!(wire::read_answer(&mut reader).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The suspend → resume path the lever exists for: turned on in one run, it arms the next
+    /// start, which takes it once and starts its worker with stack logging.
+    #[test]
+    fn malloc_stacks_arms_the_next_start_once() {
+        let _serial = lock(&ACCESS_LEVER_TESTS);
+        assert!(
+            std::env::var_os(MALLOC_STACKS.env()).is_none(),
+            "unset {} to run the unit tests",
+            MALLOC_STACKS.env()
+        );
+        let dir = std::env::temp_dir().join(format!("limina-malloc-stacks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let snapshot = dir.join("snapshot.bin");
+        let marker = dir.join("snapshot.malloc-stacks");
+        let lever = |on| {
+            handle(&Request::Lever {
+                name: MALLOC_STACKS.name().into(),
+                on,
+            })
+            .unwrap()
+        };
+
+        // The suspended run: off by default, then turned on, which arms the next start.
+        arm_next_start(Some(&snapshot));
+        assert!(!MALLOC_STACKS.on());
+        assert_eq!(worker_malloc_stacks(), None);
+        let reply = lever(true);
+        assert!(reply[0].contains("next start or resume"), "{reply:?}");
+        assert!(marker.exists());
+        assert_eq!(worker_malloc_stacks(), Some(("MallocStackLogging", "lite")));
+
+        // The resume: a fresh process, so the lever starts off; the marker turns it on, once.
+        MALLOC_STACKS.set(false);
+        arm_next_start(Some(&snapshot));
+        assert!(MALLOC_STACKS.on());
+        assert!(!marker.exists(), "the start that takes it disarms it");
+
+        // The start after that runs without it.
+        MALLOC_STACKS.set(false);
+        arm_next_start(Some(&snapshot));
+        assert!(!MALLOC_STACKS.on());
+
+        // Turned off again before the suspend, nothing is left armed.
+        lever(true);
+        lever(false);
+        assert!(!marker.exists());
+        assert!(!MALLOC_STACKS.on());
+
+        *lock(&NEXT_START_MARKER) = None;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn malloc_stacks_without_a_suspend_path_lasts_this_run() {
+        let _serial = lock(&ACCESS_LEVER_TESTS);
+        *lock(&NEXT_START_MARKER) = None;
+        assert!(set_next_start(true)[0].contains("next reboot of this run"));
     }
 }

@@ -1991,6 +1991,8 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     if let Err(e) = debug_ctl::serve() {
         log::warn!("debug: no runtime log/lever control for this run: {e:#}");
     }
+    // Before the first spawn: a `malloc-stacks` lever the last run armed applies to this one.
+    debug_ctl::arm_next_start(cli.snapshot_file.as_deref());
     // What the control center and `limina ssh-port` ask a running VM, and the SSH forward move.
     // The boot disk it reports is what `limina <verb> <disk>` finds a flat run by.
     runtime_ctl::set_disk(

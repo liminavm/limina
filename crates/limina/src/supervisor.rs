@@ -706,6 +706,15 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
         "LIMINA_MEMORY_TRACE".into(),
         crate::debug_ctl::worker_memory_trace().into(),
     ));
+    // Malloc stack logging is read at exec, so it can only ever reach a worker spawned after the
+    // lever was set — this one, when it is on.
+    if let Some((k, v)) = crate::debug_ctl::worker_malloc_stacks() {
+        log::warn!(
+            "memory: this worker records every allocation's stack ({k}={v}); read them with \
+             `malloc_history <worker pid> -allByCount`"
+        );
+        env.push((k.into(), v.into()));
+    }
 
     let (spice_host, spice_worker) = socketpair(libc::SOCK_STREAM)?;
     args.push("--spice-fd".into());
