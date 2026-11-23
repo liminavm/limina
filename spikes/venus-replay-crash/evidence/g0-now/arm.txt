@@ -1,0 +1,3 @@
+label=g0-now image=Fedora-Workstation-44.metal.test.raw app=tree e82aa597
+LIMINA_KK_ICD=/Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.aarch64.json
+MESA_PREFIX=/Volumes/mesa-cs/zink-kk-prefix

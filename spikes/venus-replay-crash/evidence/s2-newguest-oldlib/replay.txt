@@ -1,0 +1,35 @@
+kernel=7.3.4-200.fc44.aarch64 module=/lib/modules/7.3.4-200.fc44.aarch64/extra/virtio-gpu.ko.xz
+mesa-vulkan-drivers-26.2.7-1.fc44.aarch64
+mesa-libgbm-26.2.7-1.fc44.aarch64
+libdrm-2.4.134-1.fc44.aarch64
+gfxr=/opt/gfxreconstruct/bin/gfxrecon-replay
+bash: line 9:  2757 Segmentation fault         XDG_RUNTIME_DIR=/run/user/1000 VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1 VK_DRIVER_FILES=$icd timeout 200 "$GFXR" --wsi headless /tmp/vkcube.gfxr > /tmp/r.txt 2>&1
+RESULT icd=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json run=1 rc=139 
+  | timeout: the monitored command dumped core
+bash: line 9:  2773 Segmentation fault         XDG_RUNTIME_DIR=/run/user/1000 VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1 VK_DRIVER_FILES=$icd timeout 200 "$GFXR" --wsi headless /tmp/vkcube.gfxr > /tmp/r.txt 2>&1
+RESULT icd=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json run=2 rc=139 
+  | timeout: the monitored command dumped core
+RESULT icd=/tmp/swap/icd.json run=1 rc=255 
+  | ================== Start timer (Frame: 1) ==================
+  | [gfxrecon] WARNING - WSI was specified, but no surface was available at capture time, option will be ignored
+  | [gfxrecon] INFO - Enabling the VK_KHR_get_surface_capabilities2 extension
+  | Replay has encountered a fatal error and cannot continue: [gfxrecon] FATAL - API call at index: 2 thread: 1 vkCreateInstance returned error value VK_ERROR_OUT_OF_HOST_MEMORY that does not match the result from the capture file: VK_SUCCESS. Replay cannot continue.
+RESULT icd=/tmp/swap/icd.json run=2 rc=255 
+  | ================== Start timer (Frame: 1) ==================
+  | [gfxrecon] WARNING - WSI was specified, but no surface was available at capture time, option will be ignored
+  | [gfxrecon] INFO - Enabling the VK_KHR_get_surface_capabilities2 extension
+  | Replay has encountered a fatal error and cannot continue: [gfxrecon] FATAL - API call at index: 2 thread: 1 vkCreateInstance returned error value VK_ERROR_OUT_OF_HOST_MEMORY that does not match the result from the capture file: VK_SUCCESS. Replay cannot continue.
+RESULT icd=/etc/vulkan/icd.d/limina-venus.json run=1 rc=0 Measured FPS: 2359.539782 fps, 0.084762 seconds, 200 frames, 1 loop, framerange [1-201)
+  | ================== End timer (Frame: 201) ==================
+  | Load time:  0.000000 seconds (frame 1)
+  | Total time: 0.084814 seconds
+  | Measured FPS: 2359.539782 fps, 0.084762 seconds, 200 frames, 1 loop, framerange [1-201)
+RESULT icd=/etc/vulkan/icd.d/limina-venus.json run=2 rc=0 Measured FPS: 2311.755672 fps, 0.086514 seconds, 200 frames, 1 loop, framerange [1-201)
+  | ================== End timer (Frame: 201) ==================
+  | Load time:  0.000000 seconds (frame 1)
+  | Total time: 0.086567 seconds
+  | Measured FPS: 2311.755672 fps, 0.086514 seconds, 200 frames, 1 loop, framerange [1-201)
+  k| Nov 23 13:44:13 fedora kernel: virtio_gpu: loading out-of-tree module taints kernel.
+  k| Nov 23 13:44:13 fedora kernel: virtio_gpu: module verification failed: signature and/or required key missing - tainting kernel
+  k| Nov 23 13:44:13 fedora kernel: [drm] Initialized virtio_gpu 0.1.0 for LNRO0005:05 on minor 0
+  k| Nov 23 13:44:13 fedora kernel: virtio-mmio LNRO0005:05: [drm] fb0: virtio_gpudrmfb frame buffer device

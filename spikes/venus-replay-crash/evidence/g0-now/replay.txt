@@ -1,0 +1,25 @@
+kernel=7.3.4-200.fc44.aarch64 module=/lib/modules/7.3.4-200.fc44.aarch64/extra/virtio-gpu.ko.xz
+mesa-vulkan-drivers-26.2.7-1.fc44.aarch64
+mesa-libgbm-26.2.7-1.fc44.aarch64
+libdrm-2.4.134-1.fc44.aarch64
+gfxr=/opt/gfxreconstruct/bin/gfxrecon-replay
+bash: line 9:  2352 Segmentation fault         XDG_RUNTIME_DIR=/run/user/1000 VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1 VK_DRIVER_FILES=$icd timeout 200 "$GFXR" --wsi headless /tmp/vkcube.gfxr > /tmp/r.txt 2>&1
+RESULT icd=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json run=1 rc=139 
+  | timeout: the monitored command dumped core
+bash: line 9:  2368 Segmentation fault         XDG_RUNTIME_DIR=/run/user/1000 VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1 VK_DRIVER_FILES=$icd timeout 200 "$GFXR" --wsi headless /tmp/vkcube.gfxr > /tmp/r.txt 2>&1
+RESULT icd=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json run=2 rc=139 
+  | timeout: the monitored command dumped core
+RESULT icd=/etc/vulkan/icd.d/limina-venus.json run=1 rc=0 Measured FPS: 2169.766125 fps, 0.092176 seconds, 200 frames, 1 loop, framerange [1-201)
+  | ================== End timer (Frame: 201) ==================
+  | Load time:  0.000000 seconds (frame 1)
+  | Total time: 0.092223 seconds
+  | Measured FPS: 2169.766125 fps, 0.092176 seconds, 200 frames, 1 loop, framerange [1-201)
+RESULT icd=/etc/vulkan/icd.d/limina-venus.json run=2 rc=0 Measured FPS: 2324.122063 fps, 0.086054 seconds, 200 frames, 1 loop, framerange [1-201)
+  | ================== End timer (Frame: 201) ==================
+  | Load time:  0.000000 seconds (frame 1)
+  | Total time: 0.086104 seconds
+  | Measured FPS: 2324.122063 fps, 0.086054 seconds, 200 frames, 1 loop, framerange [1-201)
+  k| Nov 23 13:28:28 fedora kernel: virtio_gpu: loading out-of-tree module taints kernel.
+  k| Nov 23 13:28:28 fedora kernel: virtio_gpu: module verification failed: signature and/or required key missing - tainting kernel
+  k| Nov 23 13:28:28 fedora kernel: [drm] Initialized virtio_gpu 0.1.0 for LNRO0005:05 on minor 0
+  k| Nov 23 13:28:28 fedora kernel: virtio-mmio LNRO0005:05: [drm] fb0: virtio_gpudrmfb frame buffer device

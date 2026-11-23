@@ -1,0 +1,6 @@
+label=h2-b1015 image=Fedora-Workstation-44.metal.test.raw app=<parked Limina-2026-10-15-1.dmg>/Limina.app
+LIMINA_BIN=<parked Limina-2026-10-15-1.dmg>/Limina.app/Contents/MacOS/limina
+LIMINA_VMM_BIN=<parked Limina-2026-10-15-1.dmg>/Limina.app/Contents/MacOS/limina-vmm
+LIMINA_FIRMWARE=<parked Limina-2026-10-15-1.dmg>/Limina.app/Contents/Resources/KRUN_EFI.gop.fd
+LIMINA_KK_ICD=<parked Limina-2026-10-15-1.dmg>/Limina.app/Contents/Resources/vulkan/kosmickrisp_icd.json
+MESA_PREFIX=spikes/venus-replay-crash/work.noindex/prefix-h2-b1015
