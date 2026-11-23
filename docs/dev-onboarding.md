@@ -319,10 +319,10 @@ scripts/package-gpu-drivers.sh     # + the DKMS virtio-gpu module -> target/gpu-
 NOTE="..." scripts/package-enhanced.sh rNN   # payload/limina-guest-tools-f44-rNN.tar.zst
 ```
 
-`enhanced` (= `scripts/build-enhanced-kernel.sh`) runs `scripts/provision/f44/build-kernel-rpm.sh`
+`enhanced` (= `scripts/build-enhanced-kernel.sh`) runs `scripts/provision/fedora/build-kernel-rpm.sh`
 — **the same script a booted guest runs**, not a second implementation. It needs an F44 aarch64
 system, which is what the image is; run it in a guest instead when you want the dogfood signal of
-a guest building its own kernel (`scripts/provision/f44/README.md`). `package-enhanced.sh`
+a guest building its own kernel (`scripts/provision/fedora/README.md`). `package-enhanced.sh`
 assembles the payload on the host from the kernel, the GPU drivers and the musl agents;
 `scripts/provision/deliver-payload.sh` installs it into images (`docs/images.md`). Moving the
 whole toolchain to a new Fedora is `FEDORA_REL=45 FORCE=1 scripts/build-image.sh`.

@@ -455,7 +455,7 @@ the as-built note).
 - ISO/boot-order/firmware: `third_party/cardea/crates/bootmgr/src/lib.rs`,
   `third_party/cardea/crates/partition/src/el_torito.rs`, `third_party/cardea/firmware/src/bds.rs`,
   `scripts/prepare-efi-image.sh:77-79,90-93`.
-- Enhanced PRODUCT boots BLS `root=UUID=` (NOT no-initramfs): `scripts/provision/f44/build-kernel-rpm.sh:83,141-142,152-155`,
+- Enhanced PRODUCT boots BLS `root=UUID=` (NOT no-initramfs): `scripts/provision/fedora/build-kernel-rpm.sh:83,141-142,152-155`,
   `scripts/build-kernel-rpm.sh:5-12,36-37,158-162`, `scripts/provision/install-enhanced.sh:18-20,172,209-215,240-242,246-249,368-451`,
   `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh:46-49`, `docs/images.md:60`, `docs/roadmap.md` §M4–M5.
 - Dev/test no-initramfs direct-kernel path (kept, but not the product): `crates/limina-test/src/lib.rs:176-199,420,464,484-540,1007-1036`,

@@ -3,7 +3,7 @@
 #
 # Run this INSIDE a booted enhanced-tier Fedora guest (see this directory's README for why
 # in-guest rather than a macOS container build). It is the reproducible half of
-# `Fedora-Workstation-44.enhanced.synoik.raw` — see docs/images.md for the host-side steps
+# `Fedora-Workstation-<REL>.enhanced.synoik.raw` — see docs/images.md for the host-side steps
 # (clone the base image, boot it with --net) that bracket this script.
 #
 # Why the image exists at all: a whole class of host bugs is only reachable when the
@@ -20,7 +20,7 @@
 #   PROFILE=release             which build the session runs
 #
 # Usage (as the target user, with passwordless sudo):
-#   scripts/provision/f44/install-synoik-session.sh
+#   scripts/provision/fedora/install-synoik-session.sh
 set -euo pipefail
 
 SYNOIK_REPO="${SYNOIK_REPO:-https://github.com/kov/synoik}"

@@ -10,7 +10,7 @@
 # source of truth, the patch files are a build artifact.
 #
 # Why the artifact still exists: the ENHANCED kernel builds straight from the fork rev and needs
-# no patches (scripts/provision/f44/build-kernel-rpm.sh), but the *test* kernels are built at
+# no patches (scripts/provision/fedora/build-kernel-rpm.sh), but the *test* kernels are built at
 # other upstream tags (v6.12 4k, v7.1 16k — scripts/build-test-kernel.sh), so they still need
 # the changes as a series to apply onto a different base. Those applies are tolerant: a patch
 # that doesn't fit its target tag is skipped (PATCHES_OPTIONAL), exactly as before.

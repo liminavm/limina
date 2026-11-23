@@ -11,7 +11,7 @@
 #
 # Base = the enhanced-tier RPM target, parameterised. This used to be a bare `FROM fedora:43`,
 # which is the whole reason the F44 enhanced-tier builds had to run inside a booted guest
-# instead: scripts/provision/f44/README.md's four reasons for in-guest (rpmbuild stamping
+# instead: scripts/provision/fedora/README.md's four reasons for in-guest (rpmbuild stamping
 # `.fc44`, linking F44 sonames, `dnf download --source` returning F44 SRPMs, aarch64-native)
 # are all properties of being an F44 aarch64 *system*, not of being a VM — there simply was no
 # F44 build environment to use. With this an argument, there is one, and the two tracks are
@@ -30,7 +30,7 @@ FROM fedora:${FEDORA_REL}
 #                                          libwayland-client xcb-util-keysyms-devel xcb-util-wm-devel
 #   enhanced tier, in-container …………… sudo kernel-core cargo rust
 #
-# The last row is what lets scripts/provision/f44/build-kernel-rpm.sh run here as well as in a
+# The last row is what lets scripts/provision/fedora/build-kernel-rpm.sh run here as well as in a
 # guest:
 #   - `sudo`: those scripts are written to run as an unprivileged guest user and call `sudo dnf`.
 #     As root, sudo is a pass-through, so having it present costs nothing and means the SAME

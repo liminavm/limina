@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
 
-# Build the limina enhanced-tier 16 KiB-page kernel as a Fedora RPM, NATIVELY INSIDE an F44 guest.
+# Build the limina enhanced-tier 16 KiB-page kernel as a Fedora RPM, NATIVELY INSIDE a Fedora guest of the target release.
 #
 # Per the "Fedora config for the most part" goal, this does NOT use a bare upstream `make
 # defconfig` (the retired F43 builder did). Instead it starts from the real
@@ -22,7 +22,7 @@
 # CONFIG_BASE (base config). If the Fedora-config build fights you, the validated fallback is
 # the upstream-defconfig recipe of the retired F43 builder (`git log -- scripts/build-kernel-rpm.sh`).
 #
-# Usage (in the guest):  scripts/provision/f44/build-kernel-rpm.sh
+# Usage (in the guest):  scripts/provision/fedora/build-kernel-rpm.sh
 # Output: $OUT/limina-kernel-16k-*.rpm and its -devel  (default ~/limina-build/kernel)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -211,7 +211,7 @@ Requires(posttrans): systemd-udev
 Requires(posttrans): dracut
 Requires(preun): systemd-udev
 %description
-The limina enhanced tier kernel: F44's config + 16 KiB pages (required for venus host-visible
+The limina enhanced tier kernel: Fedora's config + 16 KiB pages (required for venus host-visible
 blobs on the 16 KiB-page macOS host). Installs alongside stock; GRUB offers both, falling back to
 stock 4 KiB if 16k ever fails.
 %package devel

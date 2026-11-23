@@ -4,10 +4,10 @@
 
 # Build the enhanced tier's 16 KiB kernel RPM (and its -devel) in the unified `limina-build`
 # container — the same image every other Linux build uses. It runs
-# scripts/provision/f44/build-kernel-rpm.sh unchanged; the same script runs in a booted F44 guest
-# too, which is the better place when you want the dogfood signal of a guest building its own
-# kernel. The container is an F44 aarch64 system, which is all the RPM needs: rpmbuild stamps
-# `.fc44`, and the base config is F44's kernel-core's.
+# scripts/provision/fedora/build-kernel-rpm.sh unchanged; the same script runs in a booted Fedora
+# guest too, which is the better place when you want the dogfood signal of a guest building its
+# own kernel. The container is a Fedora aarch64 system of release FEDORA_REL, which is all the RPM
+# needs: rpmbuild stamps `.fc<REL>`, and the base config is that release's kernel-core's.
 #
 # Usage: scripts/build-enhanced-kernel.sh
 #   FEDORA_REL=45   build for another Fedora (also rebuild the image: FORCE=1 build-image.sh)
@@ -69,7 +69,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         export HOME=/root OUT=/out
         ${RELEASE:+export RELEASE='$RELEASE'}
         $KERNEL_SRC_ENV
-        exec /repo/scripts/provision/f44/build-kernel-rpm.sh
+        exec /repo/scripts/provision/fedora/build-kernel-rpm.sh
     "
 
 echo "==> 16k kernel built:"

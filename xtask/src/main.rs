@@ -37,7 +37,7 @@
 //! Linux-side builds — all of them in the ONE `limina-build` container image
 //! (`scripts/build-image.sh`, Fedora 44 by default, `FEDORA_REL` to move it):
 //!   `enhanced` — the enhanced tier's 16 KiB kernel RPM (wraps `scripts/build-enhanced-kernel.sh`,
-//!              which runs the very same `scripts/provision/f44/build-kernel-rpm.sh` a booted
+//!              which runs the very same `scripts/provision/fedora/build-kernel-rpm.sh` a booted
 //!              guest runs). `scripts/package-enhanced.sh` assembles the payload from it.
 //!   `sign`   — codesign an already-built worker (just the hypervisor-entitlement step).
 //!   `test`   — build + sign + run the HVF-gated boot tests (wraps
@@ -646,7 +646,7 @@ fn mesa(what: Option<&str>) -> Result<()> {
 
 /// Build the enhanced tier's 16 KiB kernel RPM in the unified Linux build container.
 ///
-/// The script runs `scripts/provision/f44/build-kernel-rpm.sh` unchanged -- the same file a
+/// The script runs `scripts/provision/fedora/build-kernel-rpm.sh` unchanged -- the same file a
 /// booted guest runs. It needs an F44 aarch64 system, which the build image is.
 fn enhanced() -> Result<()> {
     bash_script(

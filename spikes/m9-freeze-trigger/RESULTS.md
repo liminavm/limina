@@ -140,7 +140,7 @@ deployed.
 **Enhanced tier also s2idles (verified 2026-07-18).** An earlier note here claimed the 16k enhanced
 kernel "has no PM configs" — that was WRONG (it conflated the `scripts/build-test-kernel.sh`
 `--kernel`-injection *test* kernel with the shipped enhanced tier). The enhanced kernel is built by
-`scripts/provision/f44/build-kernel-rpm.sh` **from the guest's real Fedora config** + only a 16k
+`scripts/provision/fedora/build-kernel-rpm.sh` **from the guest's real Fedora config** + only a 16k
 delta, so it inherits Fedora's full PM stack. Grepped the shipped `/boot/config-7.1.2-limina16k`:
 `CONFIG_SUSPEND=y`, `CONFIG_PM_SLEEP=y`, `CONFIG_HIBERNATION=y`, `CONFIG_RTC_DRV_PL031=y`,
 `CONFIG_ARM64_16K_PAGES=y`; `/sys/power/state`=`freeze mem disk`, `mem_sleep`=`[s2idle]`. And the

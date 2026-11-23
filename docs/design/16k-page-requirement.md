@@ -6,7 +6,7 @@ anything is impossible without it. A stock distro working unaided is now gated o
 *userspace* upstream work rather than a chain of five (§ "Just works on a regular distro").
 
 The enhanced kernel RPM's only load-bearing page-size difference from Fedora's is one config
-symbol, `CONFIG_ARM64_16K_PAGES=y` (`scripts/provision/f44/build-kernel-rpm.sh:11`); the
+symbol, `CONFIG_ARM64_16K_PAGES=y` (`scripts/provision/fedora/build-kernel-rpm.sh:11`); the
 `liminavm/linux` `limina` branch carries two virtio-gpu commits (`docs/upstreaming/ledger/linux.md`). So the honest question is whether
 that one symbol still earns a multi-GB build, and the answer is that it earns it on performance
 alone.

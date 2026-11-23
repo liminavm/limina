@@ -14,7 +14,7 @@ libkrun HVF-backend gaps (which we own and can patch). Resume itself is therefor
   support S4" from the kernel-config question.
   > ⚠️ CORRECTION (2026-07-18): an earlier version of this line claimed "our 16k kernel doesn't have
   > the PM configs". That is WRONG for the **shipped enhanced kernel** — it's built by
-  > `scripts/provision/f44/build-kernel-rpm.sh` **from Fedora's config** + a 16k delta, so it inherits
+  > `scripts/provision/fedora/build-kernel-rpm.sh` **from Fedora's config** + a 16k delta, so it inherits
   > `CONFIG_SUSPEND=y` / `CONFIG_PM_SLEEP=y` / `CONFIG_HIBERNATION=y` (verified on the shipped
   > `/boot/config-7.1.2-limina16k`, and the enhanced kernel does a clean `rtcwake -m freeze` round-trip
   > — see `spikes/m9-freeze-trigger/RESULTS.md`). The "zero PM configs" only ever applied to the

@@ -442,7 +442,7 @@ changes how the session comes up.
 
 ##### Rebuilding it (and retargeting to F45)
 
-The guest-side work is scripted: **`scripts/provision/f44/install-synoik-session.sh`**, which
+The guest-side work is scripted: **`scripts/provision/fedora/install-synoik-session.sh`**, which
 runs **in the guest** and is idempotent (re-run it to update synoik). It installs the build
 deps, clones/updates `~/synoik`, builds, and calls synoik's own `install-test-session.sh` —
 never hand-roll the systemd drop-in, since the installer is the source of truth for it and for
@@ -454,7 +454,7 @@ Host-side bracket, from the repo root:
 cp -c Fedora-Workstation-44.enhanced.test.raw Fedora-Workstation-44.enhanced.synoik.raw  # APFS CoW, instant
 cargo xtask run --disk Fedora-Workstation-44.enhanced.synoik.raw                          # boots with --net
 # read the auto-allocated port from the worker log: "guest SSH forward ready: ssh -p N ..."
-scp -P <N> scripts/provision/f44/install-synoik-session.sh claude@127.0.0.1:
+scp -P <N> scripts/provision/fedora/install-synoik-session.sh claude@127.0.0.1:
 ssh -p <N> claude@127.0.0.1 './install-synoik-session.sh'
 # then reboot the guest; power it off cleanly before using the image
 ```
@@ -604,7 +604,7 @@ build arg, **44 by default** — it is the enhanced tier's target, so the RPMs l
 release they install onto. Moving the whole toolchain is `FEDORA_REL=45 FORCE=1 scripts/build-image.sh`;
 the tag is spelled once, in `build-image.sh`, and consumers source it for `$LIMINA_BUILD_IMAGE`.
 Consumers: `build-enhanced-kernel` (`cargo xtask enhanced`, which runs
-`provision/f44/build-kernel-rpm.sh` — the same script a booted guest runs), `build-test-kernel`,
+`provision/fedora/build-kernel-rpm.sh` — the same script a booted guest runs), `build-test-kernel`,
 `build-testcomp`, `build-gfxreconstruct`. Each mounts its own persistent source/cache `container volume` (the image
 carries the toolchain; the volume carries source + incremental state). **Exceptions** (correctly NOT on
 this image): the macOS-native builds (`build-app`, `build-hvf-trap-probe`,

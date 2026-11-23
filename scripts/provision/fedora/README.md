@@ -1,11 +1,11 @@
-# Fedora 44 enhanced-tier scripts
+# Fedora enhanced-tier scripts
 
 Two scripts live here:
 
 | Script | What it does |
 |---|---|
 | `build-kernel-rpm.sh` | Builds the enhanced tier's 16 KiB-page kernel as `limina-kernel-16k` + `-devel` RPMs, plus `limina-kernel-16k-source.tar.gz` (the source reference the payload ships). |
-| `install-synoik-session.sh` | Builds synoik inside an enhanced guest and makes it the session compositor — the reproducible half of `Fedora-Workstation-44.enhanced.synoik.raw` (`docs/images.md`). |
+| `install-synoik-session.sh` | Builds synoik inside an enhanced guest and makes it the session compositor — the reproducible half of `Fedora-Workstation-<REL>.enhanced.synoik.raw` (`docs/images.md`). |
 
 Everything else in the enhanced tier is not an RPM: the guest keeps its distro's Mesa, and
 limina's GPU drivers install beside it under `/opt/limina` (`scripts/build-gpu-drivers.sh`,
@@ -14,13 +14,13 @@ kernel, the drivers and the agents is assembled on the host by `scripts/package-
 
 ## The kernel: two places to run it, one script
 
-`build-kernel-rpm.sh` has to run **on an F44 aarch64 system**, so that `rpmbuild` stamps `.fc44`
+`build-kernel-rpm.sh` has to run **on a Fedora aarch64 system of the target release**, so that `rpmbuild` stamps `.fc<REL>`
 and the base config is Fedora's own. Either of these is one:
 
 ```sh
 cargo xtask enhanced                          # from macOS: scripts/build-enhanced-kernel.sh, in the
                                               # unified build container -> target/enhanced-rpms/kernel
-scripts/provision/f44/build-kernel-rpm.sh     # inside a booted F44 guest -> ~/limina-build/kernel
+scripts/provision/fedora/build-kernel-rpm.sh     # inside a booted Fedora guest -> ~/limina-build/kernel
 ```
 
 It builds the `[linux]` fork at the rev pinned in `third_party/manifest.toml` (no patch stage:
@@ -40,7 +40,7 @@ limina=/path/to/limina:ro` then `mount -t virtiofs limina-limina /mnt/limina`), 
 
 ```sh
 KERNEL_DIR=<the kernel output dir> NOTE="what changed" scripts/package-enhanced.sh rNN
-scripts/provision/deliver-payload.sh payload/limina-guest-tools-f44-rNN.tar.zst <image.raw>...
+scripts/provision/deliver-payload.sh payload/limina-guest-tools-f<REL>-rNN.tar.zst <image.raw>...
 ```
 
 `package-enhanced.sh` wants `scripts/package-gpu-drivers.sh` to have staged the GPU drivers first.

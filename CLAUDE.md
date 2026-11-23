@@ -111,7 +111,7 @@ right tool — not treat upstream as immutable:
   `gregkh/linux`, the stable-tree mirror — stable point releases don't exist in `torvalds/linux`),
   branch `limina`, pinned by `third_party/manifest.toml`. Our changes ARE the commits on that
   branch; there is no `patches/linux/` any more. The enhanced kernel RPM builds the pinned rev
-  directly (`scripts/provision/f44/build-kernel-rpm.sh`); the *test* kernels, built at other
+  directly (`scripts/provision/fedora/build-kernel-rpm.sh`); the *test* kernels, built at other
   upstream tags, consume a derived series from `scripts/export-linux-patches.sh`. The one patch
   that left the series lives with its only consumer, `guest/virtio-gpu-dkms/` (stock-4k venus —
   read that README before resurrecting it). We control this tier: we can change
