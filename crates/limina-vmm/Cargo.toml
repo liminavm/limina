@@ -67,3 +67,7 @@ objc2-metal = { version = "0.3", default-features = false, features = [
     "objc2-io-surface",
 ] }
 
+
+[dev-dependencies]
+# The copier test makes its own IOSurfaces (scanout_copier.rs).
+objc2-core-foundation = { version = "0.3", features = ["CFBase", "CFDictionary", "CFNumber", "CFString"] }

@@ -19,7 +19,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use block2::RcBlock;
-use objc2::rc::Retained;
+use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_core_foundation::CFRetained;
 use objc2_io_surface::IOSurfaceRef;
@@ -93,43 +93,68 @@ impl Blitter {
     /// Commit `job`'s blit, finishing it when the blit completes, or hand the job back when Metal
     /// cannot take it.
     fn commit(&self, job: CopyJob) -> Result<(), CopyJob> {
-        let Some(gpu) = self.gpu() else {
-            return Err(job);
-        };
         let (Some(src), Some(dst)) = (
             job.source().and_then(surface),
             job.target().and_then(surface),
         ) else {
             return Err(job);
         };
-        let (Some(from), Some(to)) = (gpu.texture(&src), gpu.texture(&dst)) else {
-            return Err(job);
+        // The handler is a shared block; the job is taken once, by whichever call comes first.
+        let job = Arc::new(Mutex::new(Some(job)));
+        let taken = job.clone();
+        let committed = self.blit(&src, &dst, move |copied| {
+            if let Some(job) = taken.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                job.finish(copied);
+            }
+        });
+        if committed {
+            return Ok(());
+        }
+        let job = job.lock().unwrap_or_else(|e| e.into_inner()).take();
+        job.map_or(Ok(()), Err)
+    }
+
+    /// Commit one blit from `src` to `dst` and call `done` with whether it completed. False, with
+    /// `done` never called, when Metal cannot take it.
+    ///
+    /// Inside a pool of its own: the virtio-gpu thread this runs on never drains one, so the
+    /// descriptors and the encoder Metal autoreleases would otherwise live as long as the worker,
+    /// some 700 bytes a present.
+    fn blit(&self, src: &IOSurfaceRef, dst: &IOSurfaceRef, done: impl Fn(bool) + 'static) -> bool {
+        autoreleasepool(|_| self.encode(src, dst, done))
+    }
+
+    fn encode(
+        &self,
+        src: &IOSurfaceRef,
+        dst: &IOSurfaceRef,
+        done: impl Fn(bool) + 'static,
+    ) -> bool {
+        let Some(gpu) = self.gpu() else {
+            return false;
+        };
+        let (Some(from), Some(to)) = (gpu.texture(src), gpu.texture(dst)) else {
+            return false;
         };
         let Some(commands) = gpu.queue.commandBuffer() else {
-            return Err(job);
+            return false;
         };
         let Some(blit) = commands.blitCommandEncoder() else {
-            return Err(job);
+            return false;
         };
         // SAFETY: a retained command buffer keeps both textures alive until it completes.
         unsafe { blit.copyFromTexture_toTexture(&from, &to) };
         blit.endEncoding();
-        // The handler is a shared block; the job is taken once, by whichever call comes first.
-        let job = Arc::new(Mutex::new(Some(job)));
         let done = RcBlock::new(
             move |commands: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
                 // SAFETY: Metal passes the command buffer that completed, alive for the call.
-                let copied =
-                    unsafe { commands.as_ref() }.status() == MTLCommandBufferStatus::Completed;
-                if let Some(job) = job.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                    job.finish(copied);
-                }
+                done(unsafe { commands.as_ref() }.status() == MTLCommandBufferStatus::Completed);
             },
         );
         // SAFETY: Metal copies the block before this returns.
         unsafe { commands.addCompletedHandler(RcBlock::as_ptr(&done)) };
         commands.commit();
-        Ok(())
+        true
     }
 }
 
@@ -147,4 +172,106 @@ pub fn install() {
     set_copier(Some(Arc::new(Blitter {
         gpu: OnceLock::new(),
     })));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::c_void;
+    use std::sync::mpsc;
+
+    use objc2_core_foundation::{
+        CFDictionary, CFNumber, CFNumberType, CFString, kCFTypeDictionaryKeyCallBacks,
+        kCFTypeDictionaryValueCallBacks,
+    };
+    use objc2_io_surface::{
+        kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight, kIOSurfacePixelFormat,
+        kIOSurfaceWidth,
+    };
+
+    use super::*;
+
+    fn bgra_surface(w: i32, h: i32) -> CFRetained<IOSurfaceRef> {
+        let num = |v: i32| -> CFRetained<CFNumber> {
+            // SAFETY: a pointer to an i32 for the SInt32 type.
+            unsafe { CFNumber::new(None, CFNumberType::SInt32Type, (&v as *const i32).cast()) }
+                .expect("a number")
+        };
+        let values = [
+            num(w),
+            num(h),
+            num(4),
+            num(w * 4),
+            num(i32::from_be_bytes(*b"BGRA")),
+        ];
+        // SAFETY: framework key constants and live CFNumbers; the dictionary retains both.
+        unsafe {
+            let mut keys: [*const c_void; 5] = [
+                (kIOSurfaceWidth as *const CFString).cast(),
+                (kIOSurfaceHeight as *const CFString).cast(),
+                (kIOSurfaceBytesPerElement as *const CFString).cast(),
+                (kIOSurfaceBytesPerRow as *const CFString).cast(),
+                (kIOSurfacePixelFormat as *const CFString).cast(),
+            ];
+            let mut vals: [*const c_void; 5] =
+                values.each_ref().map(|v| (&**v as *const CFNumber).cast());
+            let dict = CFDictionary::new(
+                None,
+                keys.as_mut_ptr(),
+                vals.as_mut_ptr(),
+                keys.len() as isize,
+                &kCFTypeDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks,
+            )
+            .expect("a dictionary");
+            IOSurfaceRef::new(&dict).expect("a surface")
+        }
+    }
+
+    /// Live malloc blocks over every zone.
+    fn blocks_in_use() -> u64 {
+        // SAFETY: zeroed POD; a null zone asks for every zone's statistics, summed into `st`.
+        let mut st: libc::malloc_statistics_t = unsafe { std::mem::zeroed() };
+        unsafe { libc::malloc_zone_statistics(std::ptr::null_mut(), &mut st) };
+        u64::from(st.blocks_in_use)
+    }
+
+    /// The copier runs on the virtio-gpu thread, which never drains an autorelease pool: whatever
+    /// a copy autoreleases (the texture descriptors, the blit encoder) has to be released by the
+    /// copy itself, or it lives as long as the thread. On the dogfood that was ~700 B a present,
+    /// 2.4 GB in 16 hours. This thread, like that one, has no pool of its own.
+    #[test]
+    fn a_copy_leaves_nothing_behind_on_a_thread_without_a_pool() {
+        std::thread::spawn(|| {
+            let blitter = Blitter {
+                gpu: OnceLock::new(),
+            };
+            if blitter.gpu().is_none() {
+                eprintln!("no Metal device; skipped");
+                return;
+            }
+            let (src, dst) = (bgra_surface(64, 8), bgra_surface(64, 8));
+            let (tx, rx) = mpsc::channel();
+            let copy = || {
+                let tx = tx.clone();
+                assert!(blitter.blit(&src, &dst, move |ok| tx.send(ok).unwrap()));
+                assert!(rx.recv().expect("the blit completes"), "the blit completed");
+            };
+            for _ in 0..50 {
+                copy();
+            }
+            const N: u64 = 1000;
+            let before = blocks_in_use();
+            for _ in 0..N {
+                copy();
+            }
+            let grown = blocks_in_use().saturating_sub(before);
+            assert!(
+                grown < N / 2,
+                "{grown} more live blocks after {N} copies: each copy left its autoreleased \
+                 objects behind"
+            );
+        })
+        .join()
+        .expect("the copy thread");
+    }
 }
