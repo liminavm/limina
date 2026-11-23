@@ -924,6 +924,26 @@ build guest), stage it into the test image or a virtiofs share, drive curated ca
 `scripts/`/xtask runner; start with `*-main` mustpass subsets and a minutes-long smoke list, diffed
 against a known-failures baseline.
 
+### Fedora's venus (Mesa 26.2.x) segfaults on a headless gfxreconstruct replay: waiting on upstream
+Stock-tier. `gfxrecon-replay --wsi headless fixtures/traces/vkcube.gfxr` on the distro venus ICD
+dies in `virtgpu_submit` (from `vn_QueueSubmit`, in the replayer's swapchain image transition after
+`vkAcquireNextImageKHR`), every time, on every F44 test image.
+
+Established (`spikes/venus-replay-crash/RESULTS.md`, measured 2026-11-23):
+- It is Fedora's Mesa, between 26.1.8 and 26.2.6. Host bundles back to 2026-10-15 crash on today's
+  guest. Today's host replays on a 26.1.8 guest. 26.2.7's `libvulkan_virtio.so` alone crashes on
+  that guest's 6.19 kernel, so the kernel is out too.
+- limina's vendor venus (`/etc/vulkan/icd.d/limina-venus.json`) replays the same trace, as do
+  vkmark and zink on the distro venus. Whether real applications reach the crashing path is not
+  measured.
+
+Next, only if a later Fedora Mesa still crashes: bisect `mesa-26.1.8..mesa-26.2.6` in
+`src/virtio/vulkan`, building only the venus driver and replaying with `probe.sh`'s `SWAP_LIB` arm
+on the 26.1.8 guest (`Fedora-Workstation-44.metal.test.bak-pre-update-2026-11-04.raw`). Check
+first whether our vendor branch already carries the fix. Until then perf-ledger's
+`vk-replay-venus-headless` row cannot record on F44 guests; the battery records
+`vk-replay-limina-venus-headless` instead.
+
 ## GPU present & scanout
 
 ### vrend scanout flushes carry no fence off the Metal transport, so a GL desktop pays a Metal copy per frame
