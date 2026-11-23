@@ -7,9 +7,8 @@
 # (see docs/images.md). Idempotent and release-agnostic (F43 / F44 / F45). Run IN THE GUEST as the
 # autologin user (it sudos as needed); boot with `--net` so the dnf step has network.
 #
-# Precondition you do first (NOT scripted — a kickstart to skip it is a tracked follow-up):
-#   gnome-initial-setup (creates the user) + your SSH pubkey in ~/.ssh/authorized_keys (so this is
-#   reachable). For F44 the existing boot.raw already satisfies this.
+# Precondition: the user exists and takes your SSH key. scripts/provision/bootstrap-user.sh does
+# that headlessly on a pristine image (gnome-initial-setup in a window is the manual equivalent).
 #
 # What it sets up (mirrors docs/images.md's `accessible` description):
 #   - sshd enabled
@@ -63,7 +62,11 @@ if [ ! -x /opt/gfxreconstruct/bin/gfxrecon-replay ]; then
   sudo dnf install -y gcc-c++ cmake ninja-build git lz4-devel libzstd-devel zlib-devel \
                       xcb-util-keysyms-devel xcb-util-devel vulkan-headers vulkan-loader-devel
   rm -rf "$HOME/gfxreconstruct"
-  git clone --depth 1 --recurse-submodules https://github.com/LunarG/gfxreconstruct "$HOME/gfxreconstruct"
+  # The commit scripts/build-gfxreconstruct.sh pins: venus_replay.rs greps this build's
+  # summary wording, which other revisions change.
+  git clone --filter=blob:none https://github.com/LunarG/gfxreconstruct "$HOME/gfxreconstruct"
+  git -C "$HOME/gfxreconstruct" checkout --quiet "${GFXR_REV:-765c3d6}"
+  git -C "$HOME/gfxreconstruct" submodule update --init --recursive
   cmake -B "$HOME/gfxreconstruct/build" -G Ninja -S "$HOME/gfxreconstruct" \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/gfxreconstruct \
     -DCMAKE_INSTALL_LIBDIR=lib64 -DGFXRECON_AGENT_BUILD=OFF -DBUILD_WERROR=OFF \
