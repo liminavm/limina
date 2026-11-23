@@ -30,8 +30,9 @@ export LD_LIBRARY_PATH=$T/lib
 echo "PROVENANCE kernel=$(uname -r) pagesize=$(getconf PAGESIZE) vcpus=$(nproc) ram=$(awk '/MemTotal/{print int($2/1024)"MiB"}' /proc/meminfo) wire=$(cat /opt/limina/*/WIRE_VERSION 2>/dev/null | tr '\n' ' ')limina-metal.a=$(sha256sum /tmp/pc/liblimina_metal.a | cut -c1-16)"
 head -n 3 $T/MANIFEST | sed 's/^/MANIFEST /'
 
-# The newest protocol the vendor drivers carry, as perf-ledger.sh picks it.
-ICD=$(ls /etc/vulkan/icd.d/limina-*.json 2>/dev/null | sort -V | tail -n 1)
+# The newest protocol the vendor drivers carry, as perf-ledger.sh picks it. Numbered names only:
+# limina-venus.json sits beside them and is the venus ICD.
+ICD=$(ls /etc/vulkan/icd.d/limina-[0-9]*.json 2>/dev/null | sort -V | tail -n 1)
 
 settle() {
   for _ in $(seq 1 40); do

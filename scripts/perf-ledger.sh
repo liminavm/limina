@@ -94,7 +94,8 @@ BASE="XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 XAUTHO
 # from 2026-07-26 on are as-shipped; rows before that carried the flag.
 if [ "$T" = metal ]; then
   # The newest protocol the vendor drivers carry; its GL needs nothing from the environment.
-  ICD=$(ls /etc/vulkan/icd.d/limina-*.json 2>/dev/null | sort -V | tail -1)
+  # Numbered names only: limina-venus.json sits beside them and is the venus ICD.
+  ICD=$(ls /etc/vulkan/icd.d/limina-[0-9]*.json 2>/dev/null | sort -V | tail -1)
   ZINK=""
 elif [ -d /opt/mesa-zink ]; then
   ICD=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json
