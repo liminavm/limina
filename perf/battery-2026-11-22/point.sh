@@ -196,6 +196,17 @@ done
 LIMINA_SSH_PORT="$PORT" LIMINA_PERF_LEDGER="$LEDGER" LIMINA_PERF_RATE=60 LIMINA_PERF_TRANSPORT=$LT step 900 scripts/perf-ledger.sh "$NOTE; run 1/1 $(valid)" \
   > "$EV/ledger-run1.txt" 2>&1
 log "perf-ledger exit=$? $(valid)"; grep -E 'ABORT|GUARD|RENDERER|^[0-9-]+,.*(gl-replay|vk-replay|glmark2)' "$EV/ledger-run1.txt" | cut -d, -f3,5
+# The distro venus perf-ledger.sh replays on segfaults in virtgpu_submit under gfxrecon-replay's
+# headless swapchain on this stack (stock guests too), so perf-ledger.sh records no
+# vk-replay-venus-headless row here. limina's own venus replays the same trace; it is a series
+# of its own, not a continuation of that one.
+if [ "$TIER" = vrend ]; then
+  scp -P "$PORT" "${SSHO[@]}" -q fixtures/traces/vkcube.gfxr claude@127.0.0.1:/tmp/
+  step 300 "${SSH[@]}" 'export XDG_RUNTIME_DIR=/run/user/1000 VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1 VK_DRIVER_FILES=/etc/vulkan/icd.d/limina-venus.json
+    /opt/gfxreconstruct/bin/gfxrecon-replay --wsi headless /tmp/vkcube.gfxr' > "$EV/vk-replay-limina-venus.txt" 2>&1
+  s=$(sed -n 's/.*Measured FPS: \([0-9.]*\) fps.*/\1/p' "$EV/vk-replay-limina-venus.txt")
+  log "vk-replay on limina venus: ${s:-NO FPS} $(valid)"; [ -n "$s" ] && row "vk-replay-limina-venus-headless" fps "$s" "$(valid)"
+fi
 for r in 1 2 3; do
   step 600 "${SSH[@]}" "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 VK_DRIVER_FILES=$GICD; vkmark -s 1280x720" \
     > "$EV/vkmark-run$r.txt" 2>&1
