@@ -11,7 +11,8 @@
 #               `cargo xtask enhanced` writes)
 #   NOTE        a line for the manifest saying what changed since the previous revision
 #   PAYLOAD_DIR where the tarball goes (default payload/, gitignored)
-# Output: $PAYLOAD_DIR/limina-guest-tools-f44-<rNN>.tar.zst, unpacking to limina-guest-tools/
+# Output: $PAYLOAD_DIR/limina-guest-tools-f<REL>-<rNN>.tar.zst, unpacking to limina-guest-tools/;
+# <REL> is the Fedora release the kernel RPM was built for (its .fc<REL> dist tag)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -20,9 +21,6 @@ case "$REV" in r[0-9]*) ;; *) echo "revision is rNN, not $REV" >&2; exit 1 ;; es
 KERNEL_DIR="${KERNEL_DIR:-target/enhanced-rpms/kernel}"
 GPU="target/gpu-drivers/limina-gpu-drivers"
 PAYLOAD_DIR="${PAYLOAD_DIR:-payload}"
-OUT="$PAYLOAD_DIR/limina-guest-tools-f44-$REV.tar.zst"
-[ ! -e "$OUT" ] || { echo "$OUT exists: a revision is never rebuilt in place" >&2; exit 1; }
-
 kernels=()
 for r in "$KERNEL_DIR"/limina-kernel-16k-*.rpm; do
   case "$r" in *-devel-*) ;; *) [ -e "$r" ] && kernels+=("$r") ;; esac
@@ -31,6 +29,10 @@ done
 KRPM="${kernels[0]}"
 DEVEL="$KERNEL_DIR/$(basename "$KRPM" | sed 's/^limina-kernel-16k-/limina-kernel-16k-devel-/')"
 KSRC="$KERNEL_DIR/limina-kernel-16k-source.tar.gz"
+REL="$(basename "$KRPM" | sed -nE 's/.*\.fc([0-9]+)\..*/\1/p')"
+[ -n "$REL" ] || { echo "no .fc<REL> dist tag in $(basename "$KRPM")" >&2; exit 1; }
+OUT="$PAYLOAD_DIR/limina-guest-tools-f$REL-$REV.tar.zst"
+[ ! -e "$OUT" ] || { echo "$OUT exists: a revision is never rebuilt in place" >&2; exit 1; }
 for f in "$DEVEL" "$KSRC"; do [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }; done
 [ -x "$GPU/install.sh" ] || { echo "no $GPU: run scripts/package-gpu-drivers.sh" >&2; exit 1; }
 
