@@ -319,18 +319,14 @@ pub fn proc_argv(pid: libc::pid_t) -> Option<Vec<String>> {
 /// test SKIPs when it (or `LIMINA_TEST_ISO`) is absent. Fetch from dl.fedoraproject.org.
 const DEFAULT_TEST_ISO: &str = "Fedora-Server-netinst-aarch64-43-1.6.iso";
 
-/// The Fedora release the L2 image set targets — `LIMINA_FEDORA_REL` (default `"44"`). The image
-/// set is mirrored per release (`vanilla`/`accessible`/`stock.test`/`enhanced`/`enhanced.test`), so
-/// the suite runs against either F43 or F44 by flipping this one var. Per-image overrides
+/// The Fedora release the L2 image set targets — `LIMINA_FEDORA_REL` (default `"44"`). Every role
+/// is mirrored per release (`Fedora-Workstation-<REL>.<role>.raw`, `docs/images.md`), so this one
+/// var moves the whole suite, the synoik and KDE images included. Per-image overrides
 /// (`LIMINA_TEST_DISK`, `LIMINA_TEST_DISK_ENH`, …) still win when set.
 ///
-/// **Default moved 43 → 44 on 2026-08-15.** F44 is the dogfood/dev family the guest components are
-/// actually built for, and the F43 pair had drifted a release behind (r9-era bases never landed
-/// there, task #31) — so the suite was quietly certifying stale guests. It cost a real
-/// investigation: the vdagent clipboard test failed only because F43's 6.12 kernel has no
-/// `uinput`, which `spice-vdagentd` treats as fatal. Tests that pin F44 explicitly
-/// ([`GuestConfig::seated_efi_synoik_from_env`], [`bench::tier_config`](crate::bench::tier_config))
-/// did so to escape this default; their pins are now redundant but harmless.
+/// The default must be the release the guest components are built for: a suite on an older
+/// family certifies stale guests (an F43 kernel without `uinput` once failed the vdagent
+/// clipboard test for no fault of ours).
 fn fedora_rel() -> String {
     std::env::var("LIMINA_FEDORA_REL").unwrap_or_else(|_| "44".to_string())
 }
@@ -853,7 +849,7 @@ impl GuestConfig {
     }
 
     /// L2 config for the vTPM's consumers: [`GuestConfig::fedora_from_env`] on the stock image
-    /// with the TPM consumers installed (`Fedora-Workstation-44.tpm.test.raw`, made by
+    /// with the TPM consumers installed (the release's `tpm.test` role, made by
     /// `scripts/provision/make-tpm-test-image.sh`), with NAT. The TPM itself is the test's to
     /// attach. Override: `LIMINA_TEST_DISK_TPM`. Returns an error (the test should SKIP) when the
     /// image is missing — it is a machine-local golden, see `docs/images.md`.
@@ -1232,14 +1228,8 @@ impl GuestConfig {
     /// — the same enhanced userspace with synoik, our Vulkan compositor, in place of
     /// gnome-shell/mutter.
     ///
-    /// The disk is **pinned to the F44 family** (`Fedora-Workstation-44.enhanced.synoik.raw`), the
-    /// same way [`bench::tier_config`](crate::bench::tier_config) pins the enhanced golden. The pin
-    /// predates the 2026-08-15 default flip (`LIMINA_FEDORA_REL` used to default to 43, and synoik
-    /// is only produced for F44, so honouring the env would have SKIPped the guard out of the
-    /// default suite); it is now redundant, and kept because synoik genuinely exists for one
-    /// release only. `LIMINA_TEST_DISK_SYNOIK` still
-    /// overrides for a deliberate different disk (e.g. an older clone, to check the test
-    /// discriminates).
+    /// The disk is the release's `enhanced.synoik` role; `LIMINA_TEST_DISK_SYNOIK` overrides for a
+    /// deliberate different disk (e.g. an older clone, to check the test discriminates).
     ///
     /// **EFI is load-bearing here, not stylistic.** The injected 6.12 test kernel (`Image-16k`,
     /// built *before* the 2026-08-04 drop of our two virtio-gpu plane commits — `74ae69adc645`
@@ -1255,7 +1245,7 @@ impl GuestConfig {
     pub fn seated_efi_synoik_from_env() -> Result<GuestConfig> {
         let disk = match std::env::var("LIMINA_TEST_DISK_SYNOIK") {
             Ok(p) => PathBuf::from(p),
-            Err(_) => repo_root().join("Fedora-Workstation-44.enhanced.synoik.raw"),
+            Err(_) => fedora_image("enhanced.synoik"),
         };
         anyhow::ensure!(
             disk.exists(),
@@ -1277,15 +1267,14 @@ impl GuestConfig {
     /// The host never offers the Metal transport here, whatever `LIMINA_TEST_TRANSPORT` says: the
     /// KDE tests guard the vrend path, and a KWin offered the transport composites on zink over it.
     ///
-    /// Pinned to the F44 family (`Fedora-Workstation-44.enhanced.kde.raw`) for the same reason as
-    /// [`GuestConfig::seated_efi_synoik_from_env`]: the image exists for one release only.
+    /// The disk is the release's `enhanced.kde` role.
     /// Overrides: `LIMINA_TEST_DISK_KDE`, `LIMINA_FIRMWARE`, plus the usual
     /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the GOP firmware
     /// or the KDE image is missing — it is a machine-local golden, see `docs/images.md`.
     pub fn seated_efi_kde_from_env() -> Result<GuestConfig> {
         let disk = match std::env::var("LIMINA_TEST_DISK_KDE") {
             Ok(p) => PathBuf::from(p),
-            Err(_) => repo_root().join("Fedora-Workstation-44.enhanced.kde.raw"),
+            Err(_) => fedora_image("enhanced.kde"),
         };
         anyhow::ensure!(
             disk.exists(),

@@ -21,7 +21,8 @@
 # Usage: scripts/perf-compute.sh [notes]
 #   PERF_TIERS   tiers to run (default "metal mlx llama")
 #   PERF_RUNS    metal-bench runs per side (default 3; MLX and llama-bench repeat inside)
-#   PERF_IMAGE   the guest image (default the main checkout's Fedora-Workstation-44.metal.test.raw)
+#   PERF_IMAGE   the guest image (default the main checkout's Fedora-Workstation-<REL>.metal.test.raw,
+#                REL from LIMINA_FEDORA_REL, default 44)
 #   PERF_EVIDENCE  where the logs go (default $PERF_HOME/runs/<date>-<commit>-<n>)
 #   LIMINA_PERF_LEDGER  as perf-ledger.sh's (default perf/ledger.csv)
 #   PERF_ALLOW_BUSY=1   measure although another VM is running (the notes then say so)
@@ -33,7 +34,7 @@ cd "$ROOT" || exit 2
 MAIN=$(cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
 TIERS=${PERF_TIERS:-metal mlx llama}
 RUNS=${PERF_RUNS:-3}
-IMAGE=${PERF_IMAGE:-$MAIN/Fedora-Workstation-44.metal.test.raw}
+IMAGE=${PERF_IMAGE:-$MAIN/Fedora-Workstation-${LIMINA_FEDORA_REL:-44}.metal.test.raw}
 LEDGER=${LIMINA_PERF_LEDGER:-perf/ledger.csv}
 DATE=$(date +%Y-%m-%d)
 COMMIT=$(git rev-parse --short HEAD)

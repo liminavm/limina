@@ -837,28 +837,12 @@ pub fn tier() -> Tier {
 
 /// Boot config for the current tier. Stock = the baseline EFI Fedora. Enhanced = the
 /// seated enhanced golden EFI-booted through the GOP firmware (guest's own 16k kernel,
-/// real agent) — with the disk **pinned to the F44 family**: `LIMINA_FEDORA_REL`
-/// defaults to 43 and the F43 enhanced golden also exists on this machine, so trusting
-/// the env would silently bench a 6.12-kernel guest with every assert green.
+/// real agent), from the `LIMINA_FEDORA_REL` family like every other L2 image.
 /// `LIMINA_TEST_DISK_ENH` still overrides for a deliberate different disk.
 pub fn tier_config() -> Result<crate::GuestConfig> {
     match tier() {
         Tier::Stock => crate::GuestConfig::baseline_fedora_from_env(),
-        Tier::Enhanced => {
-            let mut cfg = crate::GuestConfig::seated_efi_fedora_from_env()?;
-            if std::env::var("LIMINA_TEST_DISK_ENH").is_err() {
-                let disk = crate::repo_root().join("Fedora-Workstation-44.enhanced.test.raw");
-                anyhow::ensure!(
-                    disk.exists(),
-                    "F44 enhanced test golden not found at {disk:?} (set LIMINA_TEST_DISK_ENH)"
-                );
-                match &mut cfg.boot {
-                    crate::Boot::Firmware { disk: d, .. } => *d = disk,
-                    other => anyhow::bail!("seated EFI config built unexpected boot {other:?}"),
-                }
-            }
-            Ok(cfg)
-        }
+        Tier::Enhanced => crate::GuestConfig::seated_efi_fedora_from_env(),
     }
 }
 

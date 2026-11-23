@@ -4,7 +4,7 @@
 
 # Make the vTPM L2 image: a CoW clone of the stock test image with the TPM consumers installed.
 #
-#   scripts/provision/make-tpm-test-image.sh            # -> Fedora-Workstation-44.tpm.test.raw
+#   scripts/provision/make-tpm-test-image.sh            # -> Fedora-Workstation-<REL>.tpm.test.raw
 #   scripts/provision/make-tpm-test-image.sh <out.raw>
 #
 # The consumers `crates/limina-test/tests/l2_tpm.rs` runs are the ones P0 measured
@@ -20,14 +20,16 @@
 # Boots headless through EFI with the guest's own kernel, waits with scripts/wait-guest-ssh.sh,
 # installs, verifies every package and binary, and powers off. Refuses to overwrite <out>.
 #
-# Env: LIMINA_TEST_DISK (the source, default Fedora-Workstation-44.stock.test.raw),
+# Env: LIMINA_FEDORA_REL (default 44) names the family: the source defaults to its stock.test
+# and <out> to its tpm.test. LIMINA_TEST_DISK (the source),
 # LIMINA_FIRMWARE (default target/firmware/efi.fd), LIMINA_SSH_TIMEOUT (default 420),
 # LIMINA_LOGDIR (default /tmp). Needs `cargo xtask build` first.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-src="${LIMINA_TEST_DISK:-Fedora-Workstation-44.stock.test.raw}"
-out="${1:-Fedora-Workstation-44.tpm.test.raw}"
+rel="${LIMINA_FEDORA_REL:-44}"
+src="${LIMINA_TEST_DISK:-Fedora-Workstation-$rel.stock.test.raw}"
+out="${1:-Fedora-Workstation-$rel.tpm.test.raw}"
 firmware="${LIMINA_FIRMWARE:-target/firmware/efi.fd}"
 logdir="${LIMINA_LOGDIR:-/tmp}"
 ssh_timeout="${LIMINA_SSH_TIMEOUT:-420}"
