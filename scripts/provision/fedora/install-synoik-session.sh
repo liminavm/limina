@@ -50,6 +50,7 @@ sudo dnf install -y --setopt=install_weak_deps=False \
     glib2-devel cairo-gobject-devel mesa-libEGL mesa-libEGL-devel \
     libudev-devel mesa-libgbm-devel libxkbcommon-devel libinput-devel \
     dbus-devel libseat-devel libdisplay-info-devel \
+    lcms2-devel fontconfig-devel libseccomp-devel pam-devel \
     xwayland-satellite grim >/dev/null
 
 echo "==> checkout ($SYNOIK_REF)"
@@ -74,6 +75,15 @@ echo "==> install session"
 # silently drop one and still exit 0, and the real gnome-shell is installed alongside here).
 # Don't hand-roll the drop-in; call the installer so it stays correct as synoik changes.
 sudo TEST_USER="$TEST_USER" PROFILE="$PROFILE" scripts/install-test-session.sh
+
+echo "==> limina-agent-session serves the clipboard although vdagent runs"
+# xwayland-satellite gives the session a DISPLAY, so spice-vdagent starts and stays alive, but
+# its clipboard is X11-only and never sees a Wayland selection: the helper must not stand down
+# for it (docs/images.md §Clipboard, as shipped).
+sudo install -d -m 0755 /etc/systemd/user/limina-agent-session.service.d
+printf '[Service]\nEnvironment=LIMINA_CLIPBOARD_IGNORE_VDAGENT=1\n' \
+    | sudo tee /etc/systemd/user/limina-agent-session.service.d/10-ignore-vdagent.conf >/dev/null
+sudo restorecon -RF /etc/systemd/user/limina-agent-session.service.d
 
 cat <<EOF
 
