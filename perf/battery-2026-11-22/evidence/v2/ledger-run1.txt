@@ -1,0 +1,8 @@
+verify OK: Virtual-1 1280x800@59.949 scale=1.0
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))
+PROVENANCE: kernel=7.3.5-limina16k pagesize=16384 mesa=26.2.7-1.fc44 vnperf=<unset> vcpus=4 ram=3941MiB display=Virtual-1: 1280x800@59.949 scale=1.0 supported_scales=[1.0, 1.25, 1.3333, 1.6667]
+appended to perf/ledger.csv:
+2026-11-23,f84263d2,vkmark-default-metal,score,4521,"battery-2026-11-22 m2: tier metal (Fedora-Workstation-44.enhanced.test.raw r47); host KK 2b27e76a1d7; guest drivers c0a873da495; virglrs fd626a9 + libkrun 9415e900; limina f84263d2; macOS 27.0.1; run 3/3 "
+2026-11-23,f84263d2,gl-replay-venus,fps,51.9382,battery-2026-11-22 v2: tier vrend (Fedora-Workstation-44.enhanced.test.raw r47); host KK 2b27e76a1d7; guest drivers c0a873da495; virglrs fd626a9 + libkrun 9415e900; limina f84263d2; macOS 27.0.1; run 1/1 
+2026-11-23,f84263d2,gl-replay-llvmpipe,fps,735.218,battery-2026-11-22 v2: tier vrend (Fedora-Workstation-44.enhanced.test.raw r47); host KK 2b27e76a1d7; guest drivers c0a873da495; virglrs fd626a9 + libkrun 9415e900; limina f84263d2; macOS 27.0.1; run 1/1 
+2026-11-23,f84263d2,glmark2-wayland-venus,score,2897,battery-2026-11-22 v2: tier vrend (Fedora-Workstation-44.enhanced.test.raw r47); host KK 2b27e76a1d7; guest drivers c0a873da495; virglrs fd626a9 + libkrun 9415e900; limina f84263d2; macOS 27.0.1; run 1/1 

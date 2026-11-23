@@ -1,0 +1,1 @@
+limina pid=21512 (worker log /tmp/limina-worker-battery.log, disk perf/battery-2026-11-22/work.noindex/battery.raw, firmware target/firmware/efi.fd, ICD /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.aarch64.json)

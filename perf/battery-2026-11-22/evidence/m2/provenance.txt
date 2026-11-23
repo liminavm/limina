@@ -1,0 +1,24 @@
+battery-2026-11-22 m2: tier metal (Fedora-Workstation-44.enhanced.test.raw r47); host KK 2b27e76a1d7; guest drivers c0a873da495; virglrs fd626a9 + libkrun 9415e900; limina f84263d2; macOS 27.0.1
+-rwxr-xr-x@ 1 user  staff   9660568 Nov 21 01:13 /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
+-rwxr-xr-x@ 1 user  staff  16373184 Nov 21 01:14 /Volumes/mesa-cs/zink-kk-prefix/lib/libgallium-27.0.0-devel.dylib
+-rwxr-xr-x@ 1 user  staff  31617432 Nov 22 23:30 target/debug/limina
+-rwxr-xr-x@ 1 user  staff   6664688 Nov 22 23:30 target/debug/limina-gpu-host
+-rwxr-xr-x@ 1 user  staff  45947232 Nov 22 23:31 target/debug/limina-vmm
+-rwxr-xr-x@ 1 user  staff   2222512 Nov 22 19:43 target/release/limina-gpu-host
+Now drawing from 'AC Power'
+ -InternalBattery-0 (id=36110435)	100%; charged; 0:00 remaining present: true
+ %CPU    RSS COMM
+ 37.5  15152 /usr/libexec/opendirectoryd
+ 11.3 124688 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds_stores
+  6.7  26896 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+  5.8   3600 automountd
+  2.7  66288 /usr/libexec/logd
+  1.8   4624 /usr/sbin/notifyd
+  1.6 396464 claude
+  1.5  24384 /sbin/launchd
+  1.5  39168 /System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+  1.5   2432 bash
+  0.5 142176 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+  0.5  26896 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds
+  0.5  25856 /usr/libexec/syspolicyd
+  0.4   1056 head

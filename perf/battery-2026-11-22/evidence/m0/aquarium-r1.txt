@@ -1,0 +1,20 @@
+=== metal / numFish=20000 ===
+Running as unit: ff-bench.service; invocation ID: 0facab7c705b42bfb4544aaead5b58e3
+  settling 35s…
+perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-20000-fps.png: 1200x520 (from perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-20000.png 1280x800 box 0,0,300,130) bright_frac=0.0481
+  wrote perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-20000.png and perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-20000-fps.png
+=== metal / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: e7c85547a2c44268b027d8d4a74c177d
+  settling 35s…
+perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-25000-fps.png: 1200x520 (from perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-25000.png 1280x800 box 0,0,300,130) bright_frac=0.1023
+  wrote perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-25000.png and perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-25000-fps.png
+=== metal / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 747fd7b3c0904bbea3d054ade62a311d
+  settling 35s…
+perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-30000-fps.png: 1200x520 (from perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-30000.png 1280x800 box 0,0,300,130) bright_frac=0.1398
+  wrote perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-30000.png and perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-20000-fps.png
+perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-25000-fps.png
+perf/battery-2026-11-22/evidence/m0/aquarium-r1/metal-30000-fps.png

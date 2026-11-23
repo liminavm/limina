@@ -1,0 +1,24 @@
+=== metal / numFish=20000 ===
+Running as unit: ff-bench.service; invocation ID: 88344f415c0342f187530f48967ee3eb
+  settling 35s…
+capture unusable (UnidentifiedImageError); retry
+  capture attempt 1 unusable, retrying…
+perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-20000-fps.png: 1200x520 (from perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-20000.png 1280x800 box 0,0,300,130) bright_frac=0.0294
+  wrote perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-20000.png and perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-20000-fps.png
+=== metal / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: b6083a92caa44756a86014d6fa36e6c2
+  settling 35s…
+perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-25000-fps.png: 1200x520 (from perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-25000.png 1280x800 box 0,0,300,130) bright_frac=0.0626
+  wrote perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-25000.png and perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-25000-fps.png
+=== metal / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: b0980b36b93e46059a16903e961d53c9
+  settling 35s…
+capture unusable (UnidentifiedImageError); retry
+  capture attempt 1 unusable, retrying…
+perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-30000-fps.png: 1200x520 (from perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0800
+  wrote perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-30000.png and perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-20000-fps.png
+perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-25000-fps.png
+perf/battery-2026-11-22/evidence/m1/aquarium-r2/metal-30000-fps.png

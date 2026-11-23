@@ -1,0 +1,25 @@
+=======================================================
+    vkmark 2025.01
+=======================================================
+    Vendor ID:      0x106B
+    Device ID:      0x64
+    Device Name:    Apple M1 Max
+    Driver Version: 109457507
+    Device UUID:    7cad49a1445d8774a66905c2443c7455
+=======================================================
+[vertex] device-local=true: FPS: 4395 FrameTime: 0.228 ms
+[vertex] device-local=false: FPS: 4370 FrameTime: 0.229 ms
+[texture] anisotropy=0: FPS: 4787 FrameTime: 0.209 ms
+[texture] anisotropy=16: FPS: 4762 FrameTime: 0.210 ms
+[shading] shading=gouraud: FPS: 4325 FrameTime: 0.231 ms
+[shading] shading=blinn-phong-inf: FPS: 4291 FrameTime: 0.233 ms
+[shading] shading=phong: FPS: 4336 FrameTime: 0.231 ms
+[shading] shading=cel: FPS: 4326 FrameTime: 0.231 ms
+[effect2d] kernel=edge: FPS: 4330 FrameTime: 0.231 ms
+[effect2d] kernel=blur: FPS: 4431 FrameTime: 0.226 ms
+[desktop] <default>: FPS: 4623 FrameTime: 0.216 ms
+[cube] <default>: FPS: 4857 FrameTime: 0.206 ms
+[clear] <default>: FPS: 4751 FrameTime: 0.210 ms
+=======================================================
+                                   vkmark Score: 4506
+=======================================================

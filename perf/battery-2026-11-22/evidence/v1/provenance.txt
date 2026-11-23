@@ -1,0 +1,24 @@
+battery-2026-11-22 v1: tier vrend (Fedora-Workstation-44.enhanced.test.raw r47); host KK 2b27e76a1d7; guest drivers c0a873da495; virglrs fd626a9 + libkrun 9415e900; limina f84263d2; macOS 27.0.1
+-rwxr-xr-x@ 1 user  staff   9660568 Nov 21 01:13 /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
+-rwxr-xr-x@ 1 user  staff  16373184 Nov 21 01:14 /Volumes/mesa-cs/zink-kk-prefix/lib/libgallium-27.0.0-devel.dylib
+-rwxr-xr-x@ 1 user  staff  31617432 Nov 22 23:30 target/debug/limina
+-rwxr-xr-x@ 1 user  staff   6664688 Nov 22 23:30 target/debug/limina-gpu-host
+-rwxr-xr-x@ 1 user  staff  45947232 Nov 22 23:31 target/debug/limina-vmm
+-rwxr-xr-x@ 1 user  staff   2222512 Nov 22 19:43 target/release/limina-gpu-host
+Now drawing from 'AC Power'
+ -InternalBattery-0 (id=36110435)	100%; charged; 0:00 remaining present: true
+ %CPU    RSS COMM
+ 31.2  15200 /usr/libexec/opendirectoryd
+  4.9   3584 automountd
+  2.8  38928 /System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+  2.0  66000 /usr/libexec/logd
+  1.2   4624 /usr/sbin/notifyd
+  1.1  24384 /sbin/launchd
+  1.0   2432 bash
+  0.8 139344 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+  0.6  95248 /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder
+  0.5  25840 /usr/libexec/syspolicyd
+  0.4  24736 /System/Library/ExtensionKit/Extensions/WallpaperAerialsExtension.appex/Contents/MacOS/WallpaperAerialsExtension
+  0.4   3264 /usr/libexec/sysmond
+  0.4  44368 /System/Library/DriverExtensions/com.apple.DriverKit-AppleBCMWLAN.dext/com.apple.DriverKit-AppleBCMWLAN
+  0.3 422256 claude

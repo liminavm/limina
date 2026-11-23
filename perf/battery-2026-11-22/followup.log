@@ -1,0 +1,26 @@
+######## m3 03:04:05
+[03:04:06] battery-2026-11-22 m3: tier metal (Fedora-Workstation-44.enhanced.test.raw r47); host KK 2b27e76a1d7; guest drivers c0a873da495; virglrs fd626a9 + libkrun 9415e900; limina dd2c302e; macOS 27.0.1
+[03:04:06] boot
+[03:04:58] display pinned on battery: verify OK: Virtual-1 1280x800@59.949 scale=1.0
+SETTLED up=204s load=0.04
+final: up=204s load=0.04 0.06 0.02
+7.3.5-limina16k
+mesa-dri-drivers-26.2.7-1.fc44.aarch64
+mesa-vulkan-drivers-26.2.7-1.fc44.aarch64
+[03:08:14] tier metal: c0a873da495d83c604401872013f8655f33e2dc0 	deviceName         = Apple M1 Max 	driverName         = KosmicKrisp 	driverInfo         = Mesa 27.0.0-devel     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 27.0.0-devel [    0.660775] [drm] limina extension: arenas 0x380400000+0x400000000, doorbells 0x380000000+0x400000 
+[03:08:14] host libgallium: /Volumes/mesa-cs/zink-kk-prefix/lib/libgallium-27.0.0-devel.dylib 
+[03:10:14] aquarium r1 exit=0 
+[03:12:21] aquarium r2 exit=0 
+[03:14:03] perf-ledger exit=0 
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+gl-replay-metal,50.6678
+gl-replay-llvmpipe,742.248
+vk-replay-metal-headless,2109.829829
+glmark2-wayland-metal,3313
+[03:16:14] vkmark run 1: 4527 
+[03:18:24] vkmark run 2: 4511 
+[03:20:35] vkmark run 3: 4509 
+[03:20:44] worker-enh: 0 poisoned-context lines
+[03:20:45] point m3 done; read perf/battery-2026-11-22/evidence/m3/aquarium-r*/*-fps.png
+######## compute2 03:20:45
+######## followup done 03:24:48

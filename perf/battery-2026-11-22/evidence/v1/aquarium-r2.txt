@@ -1,0 +1,22 @@
+=== vrend / numFish=20000 ===
+Running as unit: ff-bench.service; invocation ID: f872b3a8b35043b9ad6444f495236ec7
+  settling 35s…
+perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-20000-fps.png: 1200x520 (from perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-20000.png 1280x800 box 0,0,300,130) bright_frac=0.1040
+  wrote perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-20000.png and perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-20000-fps.png
+=== vrend / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: d8be72dd08b845e2b82a2dc39a02ed22
+  settling 35s…
+perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-25000-fps.png: 1200x520 (from perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-25000.png 1280x800 box 0,0,300,130) bright_frac=0.0681
+  wrote perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-25000.png and perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-25000-fps.png
+=== vrend / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 910e3818504c44a48e64d34f4faf7483
+  settling 35s…
+capture unusable (UnidentifiedImageError); retry
+  capture attempt 1 unusable, retrying…
+perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-30000-fps.png: 1200x520 (from perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0784
+  wrote perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-30000.png and perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-20000-fps.png
+perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-25000-fps.png
+perf/battery-2026-11-22/evidence/v1/aquarium-r2/vrend-30000-fps.png

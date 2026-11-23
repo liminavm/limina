@@ -1,0 +1,30 @@
+[03:20:45] building: limina-metal and the native control
+[03:20:48] libkrun 9415e900; virglrs fd626a9; host mesa 2b27e76a1d7; mlx 6786d6d; llama.cpp b42b7e6d; mlx-lm 0.32.2; Fedora-Workstation-44.metal.test.raw; macOS 27.0.1
+[03:20:48] guest boot
+[03:20:58] guest tiers: metal mlx llama
+[03:22:56] guest exit 0: 34 rows; 
+[03:23:00] native metal-bench run 1/3
+[03:23:03] native metal-bench run 2/3
+[03:23:07] native metal-bench run 3/3
+[03:23:10] native mlx
+[03:23:54] native llama-bench qwen0.5b
+[03:24:00] native llama-bench qwen7b
+[03:24:48] rows appended to perf/ledger.csv; evidence in target/perf-compute/runs/2026-11-23-dd2c302e-0
+llama-bench-qwen0.5b-of-native,pp512_tok_s,1.333
+llama-bench-qwen0.5b-of-native,tg128_tok_s,1.122
+llama-bench-qwen7b-of-native,pp512_tok_s,1.225
+llama-bench-qwen7b-of-native,tg128_tok_s,1.119
+metal-cb-rate-of-native,per_s,0.945
+metal-commit-rtt-of-native,us_median,0.828
+metal-commit-rtt-of-native,us_p90,0.677
+metal-copy-bandwidth-of-native,GB_s,0.940
+metal-dispatch-rate-of-native,per_s,0.416
+metal-two-queue-of-native,ratio,2.000
+mlx-lm-qwen0.5b-of-native,gen_tok_s,1.023
+mlx-lm-qwen0.5b-of-native,prompt_tok_s,1.074
+mlx-lm-qwen7b-of-native,gen_tok_s,0.837
+mlx-lm-qwen7b-of-native,prompt_tok_s,1.235
+mlx-matmul-f16-4096-of-native,ms,1.249
+mlx-matmul-f16-4096-of-native,tflops,1.250
+mlx-matmul-f32-2048-of-native,ms,0.981
+mlx-matmul-f32-2048-of-native,tflops,0.981

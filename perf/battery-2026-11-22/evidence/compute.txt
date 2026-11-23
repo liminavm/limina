@@ -1,0 +1,26 @@
+[02:53:56] building: limina-metal and the native control
+[02:57:10] libkrun 9415e900; virglrs fd626a9; host mesa 2b27e76a1d7; mlx 6786d6d; llama.cpp b42b7e6d; mlx-lm 0.32.2; Fedora-Workstation-44.metal.test.raw; macOS 27.0.1
+[02:57:10] guest boot
+[02:57:23] guest tiers: metal mlx llama
+[02:58:59] guest exit 0: 26 rows; FAIL: llama.cpp is not on KosmicKrisp FAIL: llama.cpp is not on KosmicKrisp 
+[02:59:03] native metal-bench run 1/3
+[02:59:06] native metal-bench run 2/3
+[02:59:09] native metal-bench run 3/3
+[02:59:13] native mlx
+[02:59:55] native llama-bench qwen0.5b
+[03:00:03] native llama-bench qwen7b
+[03:00:45] rows appended to perf/ledger.csv; evidence in target/perf-compute/runs/2026-11-23-f84263d2-0
+metal-cb-rate-of-native,per_s,0.976
+metal-commit-rtt-of-native,us_median,0.793
+metal-commit-rtt-of-native,us_p90,0.664
+metal-copy-bandwidth-of-native,GB_s,0.957
+metal-dispatch-rate-of-native,per_s,0.424
+metal-two-queue-of-native,ratio,2.000
+mlx-lm-qwen0.5b-of-native,gen_tok_s,1.027
+mlx-lm-qwen0.5b-of-native,prompt_tok_s,1.082
+mlx-lm-qwen7b-of-native,gen_tok_s,0.921
+mlx-lm-qwen7b-of-native,prompt_tok_s,0.929
+mlx-matmul-f16-4096-of-native,ms,0.998
+mlx-matmul-f16-4096-of-native,tflops,0.998
+mlx-matmul-f32-2048-of-native,ms,0.861
+mlx-matmul-f32-2048-of-native,tflops,0.862

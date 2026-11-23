@@ -1,0 +1,8 @@
+================== Start timer (Frame: 1) ==================
+[gfxrecon] WARNING - WSI was specified, but no surface was available at capture time, option will be ignored
+[gfxrecon] INFO - Enabling the VK_KHR_get_surface_capabilities2 extension
+[gfxrecon] INFO - Replay adjusted the vkGetPhysicalDeviceSurfaceFormatsKHR array count: capture count = 40, replay count = 4
+================== End timer (Frame: 201) ==================
+Load time:  0.000000 seconds (frame 1)
+Total time: 0.090177 seconds
+Measured FPS: 2217.942431 fps, 0.090174 seconds, 200 frames, 1 loop, framerange [1-201)

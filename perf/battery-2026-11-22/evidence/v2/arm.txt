@@ -1,0 +1,6 @@
+c0a873da495d83c604401872013f8655f33e2dc0
+	deviceName         = Virtio-GPU Venus (Apple M1 Max)
+	driverName         = venus
+	driverInfo         = Mesa 26.2.7
+    GL_RENDERER:    virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP)))
+    GL_VERSION:     OpenGL ES 3.2 Mesa 27.0.0-devel
