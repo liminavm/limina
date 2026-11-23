@@ -279,7 +279,9 @@ if [ "$KERNEL_PRESENT" = 1 ]; then
 else
   echo "-- installing kernel (rpm -i, co-installs beside the running kernel): $(basename "$RPM")" \
     "+ $(basename "$DEVEL_RPM")"
-  rpm -ivh "$RPM" "$DEVEL_RPM"
+  # Our RPMs are unsigned, and rpm 6 (Fedora 45 on) enforces signatures by default
+  # (%_pkgverify_level all): verify the digests only, which the payload still has to pass.
+  rpm -ivh --define '_pkgverify_level digest' "$RPM" "$DEVEL_RPM"
 fi
 # KREL of the kernel we just installed — from the RPM's kernel-uname-r provide, NOT a /lib/modules
 # glob: multiple limina16k kernels now co-exist, so a glob+head would pick the wrong (older) one.
