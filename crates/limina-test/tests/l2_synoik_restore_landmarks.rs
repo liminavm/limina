@@ -244,8 +244,27 @@ fn content_losses(log: &str) -> Vec<&str> {
                 || l.contains("content export failed for classic ctx")
                 || (l.contains("classic content ctx") && l.contains("SKIPPED"))
                 || refused_count(l).is_some_and(|n| n > 0)
+                || l.contains("content restore for blob")
         })
         .collect()
+}
+
+/// How many blob contents the restore put back, from libkrun's
+/// `gpu restore: blob content restored (N blobs, M failed)`: the other half of the content
+/// path. A compositor whose GBM allocates blobs (the vendor drivers' backend) puts nothing on the
+/// classic path, so for it this is the only proof the content path ran.
+fn blob_contents_restored(log: &str) -> u32 {
+    log.lines()
+        .filter(|l| l.contains("blob content restored ("))
+        .filter_map(|l| {
+            let head = l.split(" blobs,").next()?;
+            head.rsplit(|c: char| !c.is_ascii_digit())
+                .find(|s| !s.is_empty())?
+                .parse()
+                .ok()
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// How many classic contexts the restore put content back into, from libkrun's unconditional
@@ -292,6 +311,7 @@ fn content_losses_reads_the_lines_the_workers_actually_write() {
     // looked for had been written since the re-upload loop was deleted.
     let healthy = "\
 gpu restore: classic content restored (7 contexts, 0 failed), 3 scanout flips
+gpu restore: blob content restored (32 blobs, 0 failed)
 [virglrs] classic content ctx 9: 194 restored, 0 refused, 124 named no resource this context can reach";
     assert!(
         content_losses(healthy).is_empty(),
@@ -301,12 +321,13 @@ gpu restore: classic content restored (7 contexts, 0 failed), 3 scanout flips
     let lossy = "\
 gpu snapshot: content export failed for classic ctx 4
 gpu restore: classic content restore failed for ctx 9 (8192 bytes)
+gpu restore: content restore for blob 41 failed
 [virglrs] classic content ctx 9: 61 entries, 7 SKIPPED, 2 excluded -- the skipped levels have no content in this snapshot
 [virglrs] classic content ctx 2: 194 restored, 3 refused, 0 named no resource this context can reach";
     assert_eq!(
         content_losses(lossy).len(),
-        4,
-        "each of the four loss mechanisms has to be seen: {:?}",
+        5,
+        "each of the five loss mechanisms has to be seen: {:?}",
         content_losses(lossy)
     );
 
@@ -320,6 +341,15 @@ gpu restore: classic content restore failed for ctx 9 (8192 bytes)
         p2_contexts_restored("gpu restore: nothing of the sort"),
         0,
         "a log without the line means the content path did not run, not that it was clean"
+    );
+    assert_eq!(
+        blob_contents_restored(healthy),
+        32,
+        "the restored-blob count is read"
+    );
+    assert_eq!(
+        blob_contents_restored("gpu restore: nothing of the sort"),
+        0
     );
 }
 
@@ -591,6 +621,7 @@ fn synoik_desktop_survives_snapshot_restore() {
     // was matching text no emitter had written since the re-upload loop was deleted, and the
     // gate was green throughout.
     let p2_contexts = p2_contexts_restored(&g2_log);
+    let blobs_restored = blob_contents_restored(&g2_log);
     let mut lost: Vec<String> = content_losses(&g1_log)
         .iter()
         .map(|l| format!("at snapshot: {l}"))
@@ -659,7 +690,7 @@ fn synoik_desktop_survives_snapshot_restore() {
         "post-restore: procs={procs_after} landmarks moved {}/{} body ({:.1}%) + {} in the \
          panel band (blur, band colours {band_pre} -> {band_post}), colours \
          {pre_colors} -> {post_colors}, {} allocation(s) skipped at snapshot, {} content-loss \
-         line(s) over {p2_contexts} restored context(s)",
+         line(s) over {p2_contexts} restored context(s) and {blobs_restored} restored blob(s)",
         body_moved.len(),
         body_cells,
         moved_share * 100.0,
@@ -674,7 +705,7 @@ fn synoik_desktop_survives_snapshot_restore() {
         && post_colors * 4 >= pre_colors
         && skipped.is_empty()
         && lost.is_empty()
-        && p2_contexts > 0
+        && (p2_contexts > 0 || blobs_restored > 0)
         && stalls.is_empty()
         && !procs_after.contains("=0");
     if !verdict_ok {
@@ -699,8 +730,8 @@ fn synoik_desktop_survives_snapshot_restore() {
              colour diversity:  {pre_colors} -> {post_colors} (post must keep >= 1/4)\n\
              skipped at capture: {} allocation(s) the snapshot could not read\n\
              content loss:      {} line(s) naming resources that lost their pixels\n\
-             content path ran:  {p2_contexts} context(s) restored (0 means the loss count \
-above is blind, not clean)\n\
+             content path ran:  {p2_contexts} classic context(s), {blobs_restored} blob(s) \
+restored (both 0 means the loss count above is blind, not clean)\n\
              ring stalls:       {} venus ring(s) stopped consuming after the restore\n\
              workload procs:    {procs_before} -> {procs_after}",
             pre.width,
