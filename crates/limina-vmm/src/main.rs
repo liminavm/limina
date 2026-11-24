@@ -29,6 +29,7 @@ mod shutdown;
 mod snapshot;
 mod surface_publisher;
 mod suspend;
+mod tpm_ek;
 mod usb_kbd;
 mod video_state;
 mod wake;

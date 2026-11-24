@@ -63,6 +63,17 @@ touches the guest disk, and the host can gate it on Touch ID or refuse a clone.
   each release.
 - **One PCR bank, SHA-256.** The allocation is part of the persisted state, so a bank can be
   added later without a new identity.
+- **Every TPM carries an EK certificate from a per-install limina CA**, as a manufactured TPM
+  does: systemd-tpm2-setup (systemd 262 on) persists an endorsement key only when a certificate
+  in the TPM certifies it. janus provides the mechanism: the public key of template H-2 (ECC
+  P-256) in the endorsement hierarchy, and a platform-created, write-locked NV index at
+  `0x01C00014` holding the DER (`Janus::provision_ek_certificate`). Issuing it is limina's
+  (`crates/limina-vmm/src/tpm_ek.rs`): one P-256 CA per install, made by the first TPM that
+  needs it, in `~/Library/Application Support/Limina/tpm-ek-ca` (`$LIMINA_TPM_EK_CA_DIR`
+  overrides it), so every VM on a Mac chains to one root an attestation verifier could pin. A
+  TPM without the certificate, an existing one included, gets it when its worker starts; the
+  endorsement seed is unchanged, so nothing sealed is lost. A CA that cannot be read leaves the
+  TPM without a certificate, with a warning.
 
 ## Architecture
 
@@ -188,8 +199,7 @@ An entry lands with its witness.
   replays to the reported PCRs, and a PCR-7-bound LUKS volume unlocks.
 - **P4, snapshot.** TPM state in suspend/resume. Exit: a sealed credential unseals after a
   restore, and a restore across a `Shutdown(STATE)` resumes the session state.
-- **Later:** Secure Enclave wrapping as an option; an EK certificate from a
-  per-install limina CA, if remote attestation is ever wanted.
+- **Later:** Secure Enclave wrapping as an option.
 - **Later, larger algorithms.** The engine implements RSA-2048 and ECC P-256 only, which is every
   key the P0 consumers create; `TPM2_TestParms` refuses the rest, so `tpm2-pkcs11` (the one
   client that probes widely) offers only those, and an explicit request for a larger key fails

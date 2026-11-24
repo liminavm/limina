@@ -28,7 +28,7 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "9415e900f940776084d8cfb98c763872a0de2e5a"
+rev = "7e4bd1c48843af977ddda6a7b0c71498e932a84b"
 base = "abe0a0f69a980d693327fbb1ea17d60912d30cc6"
 
 # Cardea: the guest's UEFI firmware, ours outright (Rust, MIT), docs/design/firmware-and-acpi.md.
@@ -87,7 +87,7 @@ rev = "fd626a9b06f9c13f4aa8947c8aa4a1124114a8ce"
 [janus]
 repo = "https://github.com/liminavm/janus.git"
 branch = "main"
-rev = "3f7721ff32a83f5d9a545f8fc5ad7b6587c4c2bd"
+rev = "8f0699613e71085edc532532a5006e7e1a365164"
 
 # MLX with its Metal backend built for Linux guests, over limina's GPU transport (milestone 18,
 # spikes/mlx-linux/). The `limina` branch adds one CMake option, MLX_METAL_LIMINA, and leaves

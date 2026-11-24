@@ -344,6 +344,10 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
     vmr.little_vcpus = spec.little_vcpus;
     vmr.tpm = spec.tpm;
     vmr.tpm_state = spec.tpm_state.clone();
+    // The install's CA is opened only for a TPM that lacks the certificate: once per TPM.
+    vmr.tpm_ek_certifier = Some(std::sync::Arc::new(|point: &[u8]| {
+        crate::tpm_ek::EkCa::open_or_create(&crate::tpm_ek::ca_dir())?.certify(point)
+    }));
     vmr.efi_vars = spec.efi_vars.clone();
     vmr.boot_menu = spec.boot_menu;
     if let Some(path) = &spec.boot_logo {

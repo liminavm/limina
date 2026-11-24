@@ -59,7 +59,9 @@ fn consumers(guest: &Guest) {
     // A new ssh login per step, so the group applies from the next one.
     run(guest, "tss group", "sudo usermod -aG tss claude");
 
-    // 01: systemd's SRK, made persistent.
+    // 01: systemd's SRK, and from systemd 262 on its EK, which it persists only when the TPM's
+    // EK certificate certifies the key the TPM makes. The certificate chains to the install's
+    // CA, whose certificate the host owns; the guest sees the issuer name it carries.
     run(
         guest,
         "systemd-tpm2-setup",
@@ -71,6 +73,26 @@ fn consumers(guest: &Guest) {
         "sudo tpm2_getcap handles-persistent",
     );
     assert!(handles.contains("0x81000001"), "no SRK:\n{handles}");
+    let systemd: u32 = run(
+        guest,
+        "systemd version",
+        "systemctl --version | awk 'NR == 1 { print $2 }'",
+    )
+    .trim()
+    .parse()
+    .expect("systemd's version is a number");
+    if systemd >= 262 {
+        assert!(handles.contains("0x81010001"), "no EK:\n{handles}");
+    }
+    let ek_cert = run(
+        guest,
+        "EK certificate",
+        "sudo tpm2_nvread 0x01c00014 | openssl x509 -inform DER -noout -issuer",
+    );
+    assert!(
+        ek_cert.contains("limina vTPM EK CA"),
+        "the EK certificate's issuer:\n{ek_cert}"
+    );
 
     // 02: systemd-creds, sealed with the TPM, with a PCR binding, with the host key, as a user.
     let creds = run(
