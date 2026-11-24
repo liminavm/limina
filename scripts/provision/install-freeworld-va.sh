@@ -4,8 +4,8 @@
 
 # Install RPM Fusion's mesa-va-drivers-freeworld on stock-tier images, in place.
 #
-#   scripts/provision/install-freeworld-va.sh Fedora-Workstation-44.accessible.raw \
-#       Fedora-Workstation-44.stock.test.raw
+#   scripts/provision/install-freeworld-va.sh Fedora-Workstation-45.accessible.raw \
+#       Fedora-Workstation-45.stock.test.raw
 #
 # Why a stock image gets a third-party package: Fedora builds mesa
 # `-Dvideo-codecs=all_free`, and the VA frontend refuses H.264/HEVC in vl_codec.c BEFORE the

@@ -9,7 +9,7 @@
 #
 # Boot a throwaway clone of metal.test with the disk attached, then run this against it:
 #   truncate -s 64G $PERF_HOME/tools.raw
-#   cp -c Fedora-Workstation-44.metal.test.raw $PERF_HOME/work.noindex/provision.raw
+#   cp -c Fedora-Workstation-45.metal.test.raw $PERF_HOME/work.noindex/provision.raw
 #   LIMINA_GPU_METAL=1 LIMINA_CPUS=8 LIMINA_RAM_MIB=16384 LIMINA_NET=1 \
 #     LIMINA_EXTRA_ARGS="--disk $PERF_HOME/tools.raw" LIMINA_DISK=$PERF_HOME/work.noindex/provision.raw \
 #     spikes/venus-draw-probe/boot-enhanced-efi-kk.sh &

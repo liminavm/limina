@@ -4,7 +4,7 @@
 
 # Set the GRUB menu timeout to 0 on a guest image, in place:
 #
-#   scripts/provision/trim-boot-delays.sh Fedora-Workstation-44.stock.test.raw \
+#   scripts/provision/trim-boot-delays.sh Fedora-Workstation-45.stock.test.raw \
 #       Fedora-Workstation-44.enhanced.test.raw ...
 #
 # The frozen goldens boot with `boot_success=0` in grubenv, so Workstation's menu auto-hide

@@ -8,7 +8,7 @@
 # /opt/limina/<wire>/ where the system's loaders find them, and the extended virtio-gpu module in
 # through the distro's DKMS (docs/design/metal-transport-delivery.md §1).
 #
-#   scripts/provision/deliver-metal-transport.sh Fedora-Workstation-44.metal.test.raw ...
+#   scripts/provision/deliver-metal-transport.sh Fedora-Workstation-45.metal.test.raw ...
 #
 # Nothing selects the drivers but the device: booted with the transport the guest's compositor
 # and clients run on KosmicKrisp over it, booted without it on the same drivers' virgl and venus.

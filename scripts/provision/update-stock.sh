@@ -5,8 +5,8 @@
 # Bring images up to the distro's current packages, in place: stock-tier images, and the distro
 # half of enhanced ones (their stock kernel stays versionlocked; a payload moves the 16k kernel).
 #
-#   scripts/provision/update-stock.sh Fedora-Workstation-44.accessible.raw \
-#       Fedora-Workstation-44.stock.test.raw
+#   scripts/provision/update-stock.sh Fedora-Workstation-45.accessible.raw \
+#       Fedora-Workstation-45.stock.test.raw
 #
 # A stock image is only a useful baseline while it runs what a Fedora user gets today: a kernel
 # a release behind decides what the stock-tier tests can cover (free page reporting is gated on
