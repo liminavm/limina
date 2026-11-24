@@ -222,11 +222,10 @@ fn run(name: &str, delay: Option<&str>, outputs: u32) {
             .expect("the second output never showed up connected in the guest");
     }
 
-    // The presenter needs DRM master, which the session compositor holds.
+    // The presenter needs DRM master, which the session compositor and the VT console hold.
     guest
-        .ssh_exec("sudo -n systemctl isolate multi-user.target")
-        .expect("isolating to multi-user.target");
-    std::thread::sleep(Duration::from_secs(3));
+        .release_drm_master()
+        .expect("freeing DRM master for the presenter");
 
     guest
         .ssh_exec(&format!(

@@ -62,7 +62,7 @@ waited on a fence): an image that is never written retains address space rather 
 resident pages, and the retention oracle counts bytes.
 
 Requires DRM master, so: run as root, with nothing else holding the card
-(`systemctl isolate multi-user.target` is enough to evict a session compositor).
+(`Guest::release_drm_master` evicts the session compositor and kmscon).
 
 Usage: kmschurn.py probe|churn|static[-vk]|stamp-vk|stamp2-vk [frames] [live] [width] [height]
 

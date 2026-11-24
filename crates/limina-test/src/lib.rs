@@ -3220,6 +3220,20 @@ impl Guest {
         self.ssh_exec_timeout(remote_cmd, SSH_CMD_TIMEOUT)
     }
 
+    /// Leave the primary card to a test's own KMS presenter: isolate to `multi-user.target`,
+    /// which evicts the session compositor, then stop kmscon, which from Fedora 45 on is the VT
+    /// console and holds DRM master under that target too. Settles for 3 s, as the compositor's
+    /// exit releases the card asynchronously.
+    pub fn release_drm_master(&self) -> Result<()> {
+        self.ssh_exec(
+            "sudo -n systemctl isolate multi-user.target && \
+             sudo -n systemctl stop 'kmsconvt@*.service'",
+        )
+        .context("isolating to multi-user.target and stopping kmscon")?;
+        std::thread::sleep(Duration::from_secs(3));
+        Ok(())
+    }
+
     /// [`Guest::ssh_exec`] with an explicit deadline, for steps legitimately longer (or
     /// tighter) than the default cap. On expiry the local ssh is killed and the call fails;
     /// the remote command may keep running in the guest (fine for tests — the VM is torn

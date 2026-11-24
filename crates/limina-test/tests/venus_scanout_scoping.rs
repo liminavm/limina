@@ -204,11 +204,10 @@ fn stranger_view_of_live_scanouts(
         .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd came up");
 
-    // The presenter needs DRM master, which the session compositor holds.
+    // The presenter needs DRM master, which the session compositor and the VT console hold.
     guest
-        .ssh_exec("sudo -n systemctl isolate multi-user.target")
-        .expect("isolating to multi-user.target");
-    std::thread::sleep(Duration::from_secs(3));
+        .release_drm_master()
+        .expect("freeing DRM master for the presenter");
 
     guest
         .ssh_exec(&format!(

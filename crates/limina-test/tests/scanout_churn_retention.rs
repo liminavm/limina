@@ -175,13 +175,12 @@ fn windowed_frame_apply_holds_bounded_state_under_scanout_churn() {
         .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd came up");
 
-    // Evict the session compositor: it holds DRM master, and the presenter needs it. The
-    // graphical target is not otherwise interesting here — the subject is the host's
-    // per-scanout bookkeeping, not anything GNOME does.
+    // Evict the session compositor and the VT console: they hold DRM master, and the presenter
+    // needs it. The graphical target is not otherwise interesting here — the subject is the
+    // host's per-scanout bookkeeping, not anything GNOME does.
     guest
-        .ssh_exec("sudo -n systemctl isolate multi-user.target")
-        .expect("isolating to multi-user.target");
-    std::thread::sleep(Duration::from_secs(3));
+        .release_drm_master()
+        .expect("freeing DRM master for the presenter");
 
     guest
         .ssh_exec(&format!(
@@ -218,15 +217,16 @@ fn windowed_frame_apply_holds_bounded_state_under_scanout_churn() {
             }
             Err(last)
         });
-        let out = guest
-            .ssh_exec_timeout(
-                &format!("sudo -n env {VENUS_ENV} python3 /tmp/kmschurn.py churn-vk {FRAMES}"),
-                Duration::from_secs(180),
-            )
-            .expect("running the churn presenter");
+        // Stop the watcher before anything can panic: a scope joins its threads before it
+        // unwinds, and a watcher still looping would hold the test forever.
+        let out = guest.ssh_exec_timeout(
+            &format!("sudo -n env {VENUS_ENV} python3 /tmp/kmschurn.py churn-vk {FRAMES}"),
+            Duration::from_secs(180),
+        );
         churning.store(false, std::sync::atomic::Ordering::Relaxed);
         (out, watcher.join().expect("the window watcher panicked"))
     });
+    let out = out.expect("running the churn presenter");
     eprintln!("{out}");
 
     // Settle before reading: releases and presents are drained on the supervisor's main thread
