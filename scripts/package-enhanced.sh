@@ -61,7 +61,7 @@ drivers="$(ls "$GPU/drivers/opt/limina" | tr '\n' ' ')"
   [ -z "${NOTE:-}" ] || echo "  $NOTE"
   echo "built_on: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "limina: $(git rev-parse --short=12 HEAD)$(dirty scripts guest)"
-  echo "target: fedora 44"
+  echo "target: fedora $REL"
   echo
   echo "kernel:"
   echo "  - $(basename "$KRPM")"
