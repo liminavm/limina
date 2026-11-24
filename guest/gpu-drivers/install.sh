@@ -164,6 +164,7 @@ uninstall() {
       file) rm -f "$what" ;;
     esac
   done < "$STATE/manifest"
+  ldconfig
   rmdir /opt/limina 2>/dev/null || true
   rm -rf "$STATE"
   rebuild_initramfs "$(uname -r)"
@@ -221,6 +222,14 @@ link "$N/share/vulkan/implicit_layer.d/limina-$newest-transport-select.json" \
   /etc/vulkan/implicit_layer.d/limina-transport-select.json
 if gbmdir="$(gbm_backend_dir)"; then
   link "$N/lib/gbm/dri_gbm.so" "$gbmdir/virtio_gpu_gbm.so"
+  # The backend finds its libgallium through the loader's path, not its RUNPATH: loaded through
+  # that link, its $ORIGIN is the system's backend directory, and a miss there makes libgbm fall
+  # back to the stock backend without a word. Our sonames are our own, so nothing else resolves
+  # to them.
+  LD_CONF=/etc/ld.so.conf.d/limina-gpu-drivers.conf
+  printf '%s\n' "$N/lib" > "$LD_CONF"
+  record "file $LD_CONF"
+  ldconfig
 else
   say "no libgbm on this system: the compositor keeps its stock driver"
 fi
