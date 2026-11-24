@@ -47,6 +47,10 @@ sudo chmod 0440 /etc/sudoers.d/91-limina-nopasswd
 echo "-- vulkan-tools (vulkaninfo)"
 command -v vulkaninfo >/dev/null || sudo dnf install -y vulkan-tools
 
+echo "-- the L2 landmark workload's toolchain (vkstill is built in the guest at test time)"
+# crates/limina-test/assets/vkstill-build.sh: cc, wayland-scanner, pkg-config, wayland-client, -lvulkan.
+sudo dnf install -y gcc wayland-devel pkgconf-pkg-config vulkan-loader-devel
+
 echo "-- L2 replay test tooling (glmark2 GL probe, apitrace GL replay, gfxreconstruct VK replay)"
 # These back the venus_replay L2 trace-replay tests (the GL/VK rendering regression guards).
 # glmark2 (its glmark2-es2 is the X11 GL_RENDERER probe) + apitrace (eglretrace, GL trace replay)
