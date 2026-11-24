@@ -11,7 +11,7 @@
 # --gpu-software-2d for normal boots — those are fringe modes (see CLAUDE.md).
 #
 # Use for: validating an enhanced.raw built by scripts/provision/fedora/* + install-enhanced.sh.
-#   LIMINA_DISK=Fedora-Workstation-44.enhanced.raw spikes/venus-draw-probe/boot-enhanced-efi-kk.sh
+#   LIMINA_DISK=Fedora-Workstation-45.enhanced.raw spikes/venus-draw-probe/boot-enhanced-efi-kk.sh
 set -u
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cd "$ROOT"

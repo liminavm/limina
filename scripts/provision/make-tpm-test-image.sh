@@ -20,14 +20,14 @@
 # Boots headless through EFI with the guest's own kernel, waits with scripts/wait-guest-ssh.sh,
 # installs, verifies every package and binary, and powers off. Refuses to overwrite <out>.
 #
-# Env: LIMINA_FEDORA_REL (default 44) names the family: the source defaults to its stock.test
+# Env: LIMINA_FEDORA_REL (default 45) names the family: the source defaults to its stock.test
 # and <out> to its tpm.test. LIMINA_TEST_DISK (the source),
 # LIMINA_FIRMWARE (default target/firmware/efi.fd), LIMINA_SSH_TIMEOUT (default 420),
 # LIMINA_LOGDIR (default /tmp). Needs `cargo xtask build` first.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-rel="${LIMINA_FEDORA_REL:-44}"
+rel="${LIMINA_FEDORA_REL:-45}"
 src="${LIMINA_TEST_DISK:-Fedora-Workstation-$rel.stock.test.raw}"
 out="${1:-Fedora-Workstation-$rel.tpm.test.raw}"
 firmware="${LIMINA_FIRMWARE:-target/firmware/efi.fd}"

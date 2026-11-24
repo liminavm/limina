@@ -22,8 +22,8 @@ set -euo pipefail
 # under `source`, $0 is the caller's path.
 _limina_build_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# F44 is the enhanced-tier target: the dogfood images are F44, and the RPMs must link the
-# sonames of the release they install onto.
+# F44 is the delivery target: the dogfood guest is F44, and the RPMs must link the
+# sonames of the release they install onto. The F45 test images take FEDORA_REL=45.
 export FEDORA_REL="${FEDORA_REL:-44}"
 export LIMINA_BUILD_IMAGE="${LIMINA_BUILD_IMAGE:-limina-build:fc$FEDORA_REL}"
 

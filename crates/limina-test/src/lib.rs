@@ -319,7 +319,7 @@ pub fn proc_argv(pid: libc::pid_t) -> Option<Vec<String>> {
 /// test SKIPs when it (or `LIMINA_TEST_ISO`) is absent. Fetch from dl.fedoraproject.org.
 const DEFAULT_TEST_ISO: &str = "Fedora-Server-netinst-aarch64-43-1.6.iso";
 
-/// The Fedora release the L2 image set targets — `LIMINA_FEDORA_REL` (default `"44"`). Every role
+/// The Fedora release the L2 image set targets — `LIMINA_FEDORA_REL` (default `"45"`). Every role
 /// is mirrored per release (`Fedora-Workstation-<REL>.<role>.raw`, `docs/images.md`), so this one
 /// var moves the whole suite, the synoik and KDE images included. Per-image overrides
 /// (`LIMINA_TEST_DISK`, `LIMINA_TEST_DISK_ENH`, …) still win when set.
@@ -328,7 +328,7 @@ const DEFAULT_TEST_ISO: &str = "Fedora-Server-netinst-aarch64-43-1.6.iso";
 /// family certifies stale guests (an F43 kernel without `uinput` once failed the vdagent
 /// clipboard test for no fault of ours).
 fn fedora_rel() -> String {
-    std::env::var("LIMINA_FEDORA_REL").unwrap_or_else(|_| "44".to_string())
+    std::env::var("LIMINA_FEDORA_REL").unwrap_or_else(|_| "45".to_string())
 }
 
 /// Resolve a release-specific guest image by ROLE → `Fedora-Workstation-<REL>.<role>.raw` in the
