@@ -307,7 +307,7 @@ gate nothing. `--detach` changes how a run is started, not what can be done to i
 ## 4. Linux-side builds (firmware + the enhanced tier)
 
 Everything that has to be built *on Linux* runs in one container image —
-`limina-build:fc<FEDORA_REL>`, Fedora 44 by default (`scripts/build-image.sh`, built on first
+`limina-build:fc<FEDORA_REL>`, Fedora 45 by default (`scripts/build-image.sh`, built on first
 use) — except the guest GPU drivers, which build on the oldest glibc we support
 (`guest/gpu-drivers/Containerfile`) so one build serves every distro:
 
@@ -316,12 +316,12 @@ cargo xtask firmware               # target/firmware/efi.fd — the suite's defa
 cargo xtask enhanced               # the 16k kernel RPM + -devel -> target/enhanced-rpms/kernel
 scripts/build-gpu-drivers.sh       # the vendor drivers, from the [kosmickrisp-guest] checkout
 scripts/package-gpu-drivers.sh     # + the DKMS virtio-gpu module -> target/gpu-drivers/
-NOTE="..." scripts/package-enhanced.sh rNN   # payload/limina-guest-tools-f44-rNN.tar.zst
+NOTE="..." scripts/package-enhanced.sh rNN   # payload/limina-guest-tools-f45-rNN.tar.zst
 ```
 
 `enhanced` (= `scripts/build-enhanced-kernel.sh`) runs `scripts/provision/fedora/build-kernel-rpm.sh`
-— **the same script a booted guest runs**, not a second implementation. It needs an F44 aarch64
-system, which is what the image is; run it in a guest instead when you want the dogfood signal of
+— **the same script a booted guest runs**, not a second implementation. It needs a Fedora aarch64
+system of the target release, which is what the image is; run it in a guest instead when you want the dogfood signal of
 a guest building its own kernel (`scripts/provision/fedora/README.md`). `package-enhanced.sh`
 assembles the payload on the host from the kernel, the GPU drivers and the musl agents;
 `scripts/provision/deliver-payload.sh` installs it into images (`docs/images.md`). Moving the

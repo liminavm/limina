@@ -38,9 +38,8 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
   default is `45`**. Per-image overrides (`LIMINA_TEST_DISK`, `LIMINA_TEST_DISK_ENH`, …) still win.
   The default must be a family the guest components are built for: a suite on an older one
   certifies stale guests (an F43 kernel without `uinput` once failed the vdagent clipboard test
-  for no fault of ours). F44 keeps its four enhanced images, for parity with the dogfood guest
-  (§Fedora 44); `LIMINA_FEDORA_REL=44` runs the enhanced-tier tests there. A new release is
-  §Fedora 45's procedure with its own number.
+  for no fault of ours). The dogfood guest is on the same release, so a local repro of a dogfood
+  report runs on the default images. A new release is §Fedora 45's procedure with its own number.
 
 ## The two tiers (see `CLAUDE.md`)
 
@@ -58,11 +57,12 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
 guest with `rpm -q`; the GPU drivers by `/opt/limina/<wire>/MESA_REV` and `dkms status`. The
-enhanced rows are what their payloads install (F45: r50, F44: r47) and what `deliver-payload.sh`
+enhanced rows are what the payload installs (r51) and what `deliver-payload.sh`
 verifies on each image (agent hashes, the drivers' `MESA_REV`, no limina mesa RPM or
 driver-selection file, the 16k kernel's virtio-gpu resolving to DKMS's module). The F45 rows were
-read with `rpm -q`, `dkms status` and `MESA_REV` in clones of the images 2026-11-24; the dogfood row
-on the dev VM 2026-10-25. Every enhanced image boots `7.3.5-limina16k` as its permanent default.
+read with `rpm -q`, `dkms status` and `MESA_REV` in clones of the images 2026-11-24, the kernel on
+the images themselves 2026-11-27; the dogfood row on the dev VM 2026-11-27. Every enhanced image
+boots `7.3.6-limina16k` as its permanent default.
 The synoik image never reaches `multi-user.target` (its `plymouth-quit-wait` hangs), so
 `limina-kernel-promote.service` never fires there: after its trial boot, promote by hand with the
 unit's own two steps (`grubby --set-default=/boot/vmlinuz-<KREL>`, then disable the unit).
@@ -70,18 +70,17 @@ unit's own two steps (`grubby --set-default=/boot/vmlinuz-<KREL>`, then disable 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F45 stock + freeworld VA** (`accessible`, `stock.test`, `tpm.test`, `metal.test`) | `7.3.4-300.fc45` (`7.2.11-300.fc45`, the release kernel, kept as the fallback; on `metal.test` virtio-gpu is limina's DKMS module `d1dc28435cd5`) | 4 KiB | `26.2.7-1.fc45` + `mesa-va-drivers-freeworld-26.2.7-1.fc45` | `51.1-1.fc45` | `51.1` |
-| **F45 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) | `limina-kernel-16k-7.3.5-1.fc45` (+ `-devel`; the stock kernels kept as fallbacks; virtio-gpu is limina's DKMS module `d1dc28435cd5`) | 16 KiB | **stock** `26.2.7-1.fc45` (+ freeworld), plus the vendor drivers under `/opt/limina/5` (`[kosmickrisp-guest]` `c0a873da495`) | `51.1-1.fc45` (stock) | `51.1` (stock) |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) | `limina-kernel-16k-7.3.5-1.fc44` (+ `-devel`; `7.1.13-limina16k.2` kept as the fallback; virtio-gpu is limina's DKMS module `d1dc28435cd5`) | 16 KiB | **stock** `26.2.7-1.fc44`, plus the vendor drivers under `/opt/limina/5` (`[kosmickrisp-guest]` `c0a873da495`) | `50.6-2.fc44` (stock) | `50.6` (stock) |
-| **F44 dogfood deployment** (the user's dev VM) | `limina-kernel-16k-7.1.13-2` (+ `-devel`; default `7.1.13-limina16k.2`, `7.1.13-1` and `7.1.9-1` kept as fallbacks; virtio-gpu is limina's DKMS module `0ba8d2a74e68`) | 16 KiB | **stock** `26.2.4-1.fc44`, plus the vendor drivers under `/opt/limina/5` (`MESA_REV` `20cf1a304e0`, an earlier cut of the buffer-view bound, with `libgallium` replaced by hand by the `a2d20db7dab` build, md5 `1511c7b8…`; the original kept as `~/libgallium-26.3.0-devel.so.before-zink-evict`) | n/a: synoik | n/a: synoik |
+| **F45 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) | `limina-kernel-16k-7.3.6-1.fc45` (+ `-devel`; `7.3.5-1.fc45` and the stock kernels kept as fallbacks; virtio-gpu is limina's DKMS module `d1dc28435cd5`) | 16 KiB | **stock** `26.2.7-1.fc45` (+ freeworld), plus the vendor drivers under `/opt/limina/5` (`[kosmickrisp-guest]` `c0a873da495`) | `51.1-1.fc45` (stock) | `51.1` (stock) |
+| **F45 dogfood deployment** (the user's dev VM, boots systemd-boot) | `limina-kernel-16k-7.1.13-2.fc44` (+ `-devel`; the default; `7.1.13-1` kept, `limina-kernel-16k-7.3.5-1.fc45` + `-devel` installed beside them; virtio-gpu is limina's DKMS module `d1dc28435cd5`) | 16 KiB | **stock** `26.2.7-1.fc45`, plus the vendor drivers under `/opt/limina/5` (`[kosmickrisp-guest]` `c0a873da495`) | `51.1-1.fc45` | `51.1` |
 
 The F45 sessions on top: systemd `262.1-1.fc45` on every image; KWin and Plasma `6.8.3-1.fc45` on
 `enhanced.kde`; synoik `9e5bf3ca` on `enhanced.synoik`.
 
 Two facts the table cannot show:
 
-- **The guest agents are not RPMs and so are not in the table.** Every enhanced image, F45 and
-  F44, carries **`limina-agent` 0.6.2** and **`limina-agent-session` 0.1.4**, installed to
-  `/usr/local/bin` with their units (payloads r50 and r47, both built from r42's sources). The
+- **The guest agents are not RPMs and so are not in the table.** Every enhanced image carries
+  **`limina-agent` 0.6.2** and **`limina-agent-session` 0.1.4**, installed to `/usr/local/bin` with
+  their units (payload r51, built from r42's sources). The
   dogfood guest:
   - is current on `limina-agent`: 0.6.2, the r39 binary installed by hand 2026-10-23, with 0.6.1
     kept beside it as `limina-agent.0.6.1.bak`;
@@ -160,19 +159,17 @@ The enhanced tier is a **payload**, `payload/limina-guest-tools-f<REL>-rNN.tar.z
 which `install-enhanced.sh` applies inside a running stock or enhanced guest. The guest keeps its
 distro's Mesa; nothing of the distro's is replaced, locked or shadowed.
 
-**Current payloads**, both with the GPU drivers `/opt/limina/5` at `[kosmickrisp-guest]`
+**Current payload**, with the GPU drivers `/opt/limina/5` at `[kosmickrisp-guest]`
 `c0a873da495`, DKMS `limina-virtio-gpu` `d1dc28435cd5` (series 6.19 and 7.2 from stable tags, 7.1
 and 7.3 from the `[linux]` fork, whose 7.3 sources also serve stock 7.3 kernels), `limina-agent`
-0.6.2 and `limina-agent-session` 0.1.4; each one's `manifest.txt` lists the exact contents and
+0.6.2 and `limina-agent-session` 0.1.4; its `manifest.txt` lists the exact contents and
 hashes:
 
-- **F45: `payload/limina-guest-tools-f45-r50.tar.zst`**, `limina-kernel-16k-7.3.5-1.fc45`
-  (+ `-devel`). Applied to the four F45 enhanced images (`.bak-pre-r50.raw` CoW backups); its GPU
-  drivers alone to `metal.test`.
-- **F44: `payload/limina-guest-tools-f44-r47.tar.zst`**, `limina-kernel-16k-7.3.5-1.fc44`
-  (+ `-devel`). Applied to the four F44 enhanced images (`.bak-pre-r47.raw`). It predates the
-  loader-path fix below: an F44 guest's gnome-shell can still fall back to the stock GBM backend
-  when GBM opens before EGL.
+- **F45: `payload/limina-guest-tools-f45-r51.tar.zst`**, `limina-kernel-16k-7.3.6-1.fc45`
+  (+ `-devel`). Applied to the four F45 enhanced images (`.bak-pre-r51.raw` CoW backups); its GPU
+  drivers alone to `metal.test`. Its GPU drivers are r50's unchanged, so the DKMS series line in
+  its manifest names the fork's 7.3.5-based rev: the fork's `drivers/gpu/drm/virtio` is identical
+  on both.
 
 What a payload contains (`scripts/package-enhanced.sh` writes it):
 
@@ -459,15 +456,6 @@ and `kde_vrend_world_survives_snapshot_restore` in `tests/vrend_session_restore.
 read-only, so the image's own state is what they test: keep it free of anything that changes how
 the session comes up. Plasma's Wayland socket is `wayland-0`.
 
-### Fedora 44 — the dogfood-parity enhanced images
-
-`Fedora-Workstation-44.enhanced.raw`, `.enhanced.test.raw`, `.enhanced.synoik.raw` and
-`.enhanced.kde.raw` stay because the dogfood guest is F44: a local repro of a dogfood report runs
-on the release it was reported on. They take F44 payloads (`FEDORA_REL=44`, the build image's
-default); `LIMINA_FEDORA_REL=44` runs the enhanced-tier tests on them. The F44 stock roles
-(`vanilla`, `accessible`, `stock.test`, `tpm.test`, `metal.test`) are retired; rebuild an F44 base,
-when one is needed, by §Fedora 45's procedure with F44's release image.
-
 ### Debian — the stock encrypted-root guest
 
 | Image | Role |
@@ -529,9 +517,8 @@ Every **Linux** build runs in one container image — `scripts/build-image/Conta
 use by `scripts/build-image.sh` (rebuild with `FORCE=1`). It bakes the union of all build deps
 (rpmbuild, kernel toolchain, meson/ninja + `builddep mesa`/`builddep mutter`, gfxreconstruct's cmake/xcb/X11/wayland set), so the
 per-script `dnf install` is gone and builds start instantly. The Fedora release is the `FEDORA_REL`
-build arg, **44 by default**, the dogfood guest's release: the RPMs link the sonames of the release
-they install onto. `FEDORA_REL=45` builds for the F45 images (`limina-build:fc45`; `FORCE=1
-scripts/build-image.sh` rebuilds an image). The tag is spelled once, in `build-image.sh`, and
+build arg, **45 by default**, the release of the test images and the dogfood guest: the RPMs link
+the sonames of the release they install onto (`FORCE=1 scripts/build-image.sh` rebuilds an image). The tag is spelled once, in `build-image.sh`, and
 consumers source it for `$LIMINA_BUILD_IMAGE`.
 Consumers: `build-enhanced-kernel` (`cargo xtask enhanced`, which runs
 `provision/fedora/build-kernel-rpm.sh` — the same script a booted guest runs), `build-test-kernel`,
@@ -553,8 +540,7 @@ target/debug/limina --window --firmware target/firmware/efi.fd \
 
 ### Retired families
 
-F43's whole set and F44's stock roles (`vanilla`, `accessible`, `stock.test`, `tpm.test`,
-`metal.test`) are deleted, to reclaim disk. Nothing in the harness or scripts names them; a family
+F43's and F44's whole sets are deleted, to reclaim disk. Nothing in the harness or scripts names them; a family
 is rebuilt from a fresh Fedora download by §Fedora 45's procedure.
 
 ## Credentials

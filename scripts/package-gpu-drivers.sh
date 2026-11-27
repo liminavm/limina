@@ -9,7 +9,7 @@
 #   SERIES  the kernel sources to vendor, as scripts/build-virtio-gpu-limina.sh takes them, one
 #           per kernel series (default: Fedora 44's original v6.19.10; v7.2.9; the [linux] fork
 #           at its last 7.1 rev, for the 7.1 enhanced kernels guests keep as fallbacks; and the
-#           fork at its pin, whose series also serves the stock kernels of that series (Fedora 44
+#           fork at its pin, whose series also serves the stock kernels of that series (Fedora 45
 #           and Debian testing are on 7.3): its virtio-gpu is upstream's plus additive commits)
 # Output: target/gpu-drivers/limina-gpu-drivers.tar.gz, unpacking to limina-gpu-drivers/
 set -euo pipefail

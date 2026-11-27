@@ -9,9 +9,8 @@ are specific to one agent harness live outside it: Claude Code's are in
 
 limina is a native macOS app (Apple Silicon) that runs **Linux** desktop guests on
 **libkrun + Hypervisor.framework**, built in Rust, aiming to **replace Parallels**.
-First milestone: boot a local stock Fedora image to a usable desktop (test family: **F45**;
-the dogfood guest and its local-repro images: **F44 enhanced**; canonical image inventory in
-`docs/images.md`).
+First milestone: boot a local stock Fedora image to a usable desktop (current family, for the
+test images and the dogfood guest: **F45**; canonical image inventory in `docs/images.md`).
 
 Target features (most deferrable; all must be considered in the design from the
 start): great 3D acceleration, first-class fullscreen, mouse capture, macOS
